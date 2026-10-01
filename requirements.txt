@@ -1,0 +1,2 @@
+shin==0.2.2      # independent Shin implementation used by verify_devig.py
+pytest>=8

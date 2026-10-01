@@ -1,0 +1,14 @@
+# Secrets: API keys and private keys never leave this machine
+.env
+*.pem
+*.key
+secrets/
+
+# Runtime output
+logs/
+*.csv
+
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
