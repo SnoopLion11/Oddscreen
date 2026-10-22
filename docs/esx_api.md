@@ -60,6 +60,12 @@ The docs follow the folder layout of a downloadable helper zip
 - `POST /api/blockchain-trading/cancel-all-orders-v2`: **never called**
 - `POST /api/real/markets/{marketId}/claim`: **never called**
 
+Place accepts 1-50 orders per request (`placeBuyOrder`, `placeSellOrder`,
+`placeOrders`; body `{ orders: [...] }`); buys spend USDC, sells spend held
+shares. `get-active-orders-v2` takes `status` (open | pending | partial |
+filled | cancelled), `limit` (default 100), `offset`. The screen calls none of
+these.
+
 Place returns 202 (submitted, not yet on book); getOrder/cancelOrder 404 until
 it rests; claim 403 means claim from Portfolio in the app.
 
