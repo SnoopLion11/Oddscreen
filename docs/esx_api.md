@@ -63,6 +63,22 @@ The docs follow the folder layout of a downloadable helper zip
 Place returns 202 (submitted, not yet on book); getOrder/cancelOrder 404 until
 it rests; claim 403 means claim from Portfolio in the app.
 
+## Market data REST (as provided; helper module `scripts/api-functions/marketData`)
+
+- `GET /api/markets/games`: `listGames({ sport, league })`, both required
+  (e.g. `sport: "football", league: "NFL"`). Each game has `gameId`, `startTime`.
+- `GET /api/markets/{marketId}`: `getMarket(marketId)`; marketId may be the
+  numeric id, `marketIdStr`, or slug. Returns `{ market: MarketDetail,
+  game: GameInfo | null, outcomes: Outcome[] }`. `chainOutcomeId` is a string.
+- `GET /api/markets/{marketId}/orderbook`: `getOrderbook(marketId, mode?)`,
+  `mode` is `"real" | "paper"`. **The URL returns PAPER if mode is omitted**
+  (the helper defaults to real). Returns `{ marketId: number, outcomes:
+  Record<outcomeHashId, { buy: {price, quantity}[], sell: {price, quantity}[] }> }`.
+  One snapshot; the WebSocket sends later changes.
+- `GET /api/markets/ids`: `getMarketIds({ status?, sport?, league? })` returns
+  `{ success, data: MarketIdInfo[] }`; each item has `marketId`, `title?`,
+  `status`, `outcomes[]` with `chainOutcomeId`.
+
 ## Market-data WebSocket (as provided)
 
 Connect `wss://<api-host>/v1/marketdata` with header `X-API-Key: esx_live_...`.
@@ -128,13 +144,16 @@ outcome is a bid on the other at 100 minus that price.
 
 ## Missing (needed before the ESX connector is written)
 
-1. `<api-host>` for the WebSocket: confirm it is `api.empiresportsexchange.com`.
-2. Real money vs paper: confirm `esx_live_` keys and `/api/markets/*` /
-   `/v1/marketdata` are real-money (the claim path is `/api/real/...`).
-3. "Market Data" section: listGames / listMarkets / getMarket paths and example
-   responses: `marketIdStr`, outcome ids and names, sport, league, market type,
-   line, game start / live status (and game clock if available).
-4. Whether those REST market endpoints need the login token or just the key
-   (if a token is needed: lifetime, refresh, exact Authorization format).
-5. REST rate limits.
-6. Fee structure: flat per contract vs % of winnings, and how much.
+1. **Real money on the WebSocket.** The REST order book returns paper unless
+   `mode=real` is passed. Does `/v1/marketdata` stream real-money books, and
+   if it has a mode switch, what is it?
+2. Exact way to pass `mode` to `/orderbook` (e.g. `?mode=real`).
+3. `<api-host>` for the WebSocket: confirm it is `api.empiresportsexchange.com`.
+4. Field shapes of `MarketDetail`, `GameInfo`, `Outcome`, and the listMarkets
+   section (returns `marketIdStr`): market type, line, outcome names, sport,
+   league, live status / game clock. And which outcome id is used as the key
+   in WebSocket `bids` (`outcomeId`) vs REST orderbook (`outcomeHashId`) vs
+   `chainOutcomeId`.
+5. Whether REST market endpoints need the login token or just the key.
+6. REST rate limits.
+7. Fee structure: flat per contract vs % of winnings, and how much.
