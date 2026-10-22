@@ -51,6 +51,18 @@ token from the key and caches it (`validateGoogleAuth`, `googleApiRequest`).
 The docs follow the folder layout of a downloadable helper zip
 (`scripts/api-functions/config`, `scripts/api-functions/googleAuth`).
 
+## Trading flow (as provided; display-only tool uses step 1 only)
+
+- `GET /api/markets/{marketId}`: market with `outcomes[]`; keep
+  `chainOutcomeId` as a string. **Read-only; used by the screen.**
+- `POST /api/blockchain-trading/place-order-v2`: **never called**
+- `GET /api/blockchain-trading/get-active-orders-v2`: not needed
+- `POST /api/blockchain-trading/cancel-all-orders-v2`: **never called**
+- `POST /api/real/markets/{marketId}/claim`: **never called**
+
+Place returns 202 (submitted, not yet on book); getOrder/cancelOrder 404 until
+it rests; claim 403 means claim from Portfolio in the app.
+
 ## Settled
 
 - REST base URL: `https://api.empiresportsexchange.com` (key prefix `esx_live_`).
@@ -69,6 +81,9 @@ The docs follow the folder layout of a downloadable helper zip
 3. Whether the market-data WebSocket needs the API key and/or login token.
 4. WebSocket subscribe message, update format (snapshot vs incremental), heartbeat/ping.
 5. Whether order book / WebSocket prices include size at each price (liquidity guard).
-6. Market endpoints: list games, list markets, order book (paths + example responses).
+6. Market endpoints: list games, list markets, order book (paths + example
+   responses), plus the full `GET /api/markets/{marketId}` response shape.
+   The claim path is `/api/real/...` while the market path is `/api/markets/...`:
+   confirm `/api/markets/*` returns REAL-money markets, not paper.
 7. Rate limits.
 8. Fee structure: flat per contract vs % of winnings, and how much.
