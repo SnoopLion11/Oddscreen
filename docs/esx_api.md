@@ -137,6 +137,19 @@ outcome is a bid on the other at 100 minus that price.
 - Latency: `ts` in each book message gives exchange-to-us delay in addition
   to our own receive-to-screen time.
 
+## Rate limits (as provided)
+
+- Trading calls from one IP share 200 requests/minute (placing, cancelling,
+  reading your orders).
+- Each API key: 25 requests/second.
+- 429 = limit passed; wait for the window, then retry.
+
+How the screen uses this: prices come only from the WebSocket (no REST
+polling). REST is used only for market discovery and a one-off orderbook
+snapshot per market, through a client-side limiter capped at 20 req/s
+(headroom under 25/s) with back-off on 429. It makes no trading calls, so the
+200/min IP budget is untouched.
+
 ## Settled
 
 - REST base URL: `https://api.empiresportsexchange.com` (key prefix `esx_live_`).
@@ -145,6 +158,7 @@ outcome is a bid on the other at 100 minus that price.
   (Google sign-in); the helper handles refresh.
 - Market-data WebSocket: URL path, API-key-only auth, subscribe/ping format,
   full-book-on-change updates with `seq`, sizes included, connection limits.
+- Rate limits: 25 req/s per key; 200/min per IP for trading calls.
 - Keys are not scoped: the same key + token can trade. Display-only must be
   enforced in our code (no order/cancel/claim paths).
 
@@ -161,5 +175,4 @@ outcome is a bid on the other at 100 minus that price.
    in WebSocket `bids` (`outcomeId`) vs REST orderbook (`outcomeHashId`) vs
    `chainOutcomeId`.
 5. Whether REST market endpoints need the login token or just the key.
-6. REST rate limits.
-7. Fee structure: flat per contract vs % of winnings, and how much.
+6. Fee structure: flat per contract vs % of winnings, and how much.
