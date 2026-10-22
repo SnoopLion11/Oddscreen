@@ -63,27 +63,78 @@ The docs follow the folder layout of a downloadable helper zip
 Place returns 202 (submitted, not yet on book); getOrder/cancelOrder 404 until
 it rests; claim 403 means claim from Portfolio in the app.
 
+## Market-data WebSocket (as provided)
+
+Connect `wss://<api-host>/v1/marketdata` with header `X-API-Key: esx_live_...`.
+No login token is mentioned for this socket.
+
+Subscribe with `marketIdStr` (from listMarkets / getMarket). Moneyline, each
+spread, each total and each player prop is its own market. Symbols can be
+added/removed on the same connection.
+
+```
+{ "op": "subscribe", "symbols": ["<marketIdStr>"] }
+{ "op": "unsubscribe", "symbols": ["<marketIdStr>"] }
+{ "op": "ping" }
+```
+
+Limits: 100 symbols per subscribe message, 500 symbols per connection,
+5 connections per API key. Ping at least every 30 s or the server closes the
+socket. Only open markets can be subscribed; when a market closes its
+subscription ends, and if it was the only one the socket closes.
+
+Messages: first `book` is the full set of bids; later `book` messages are a new
+FULL book, sent only when a bid changes. `seq` starts at 1 and increments by 1;
+on a gap, re-subscribe that symbol.
+
+```
+{ "type": "subscribed", "symbol": "<marketIdStr>" }
+{ "type": "book", "symbol": "<marketIdStr>", "seq": 1, "ts": 1726339200123,
+  "bids": {
+    "<first outcomeId>": [ { "price": 52, "size": 1200 }, { "price": 51, "size": 400 } ],
+    "<second outcomeId>": [ { "price": 46, "size": 800 } ]
+  }
+}
+{ "type": "pong", "ts": 1726339200200 }
+{ "type": "error", "code": "unknown_symbol", "message": "Unknown symbol EXAMPLE" }
+{ "type": "error", "code": "market_closed", "symbol": "<marketIdStr>", "message": "Market is closed" }
+```
+
+Keys under `bids` are outcomeIds of that market; price is whole cents 1-99;
+size is shares at that price. Both outcomes are included. An ask on one
+outcome is a bid on the other at 100 minus that price.
+
+### How the screen will use it
+
+- Ask for outcome A = 100 - best bid on outcome B (and vice versa), the same
+  rule as Kalshi. Size at that ask = size of B's best bid.
+- Liquidity in dollars at the ask = shares x ask price.
+- Stale detection: send `ping` every 10 s; feed is stale if nothing (book or
+  pong) arrives for the configured number of seconds.
+- Shard subscriptions across connections at 500 symbols each (max 5).
+- Latency: `ts` in each book message gives exchange-to-us delay in addition
+  to our own receive-to-screen time.
+
 ## Settled
 
 - REST base URL: `https://api.empiresportsexchange.com` (key prefix `esx_live_`).
 - Auth headers: `X-API-Key: <key>`, `Authorization: <login token>`.
 - Login token: Firebase sign-in (email/password) or derived from the key
   (Google sign-in); the helper handles refresh.
+- Market-data WebSocket: URL path, API-key-only auth, subscribe/ping format,
+  full-book-on-change updates with `seq`, sizes included, connection limits.
 - Keys are not scoped: the same key + token can trade. Display-only must be
   enforced in our code (no order/cancel/claim paths).
 
 ## Missing (needed before the ESX connector is written)
 
-1. Market-data WebSocket URL; confirmation that the REST URL above is real-money
-   (and what the paper URL / key prefix is).
-2. Login token lifetime and refresh mechanics (exact header format, e.g.
-   `Bearer <token>`), and for Google sign-in, the endpoint that exchanges the key.
-3. Whether the market-data WebSocket needs the API key and/or login token.
-4. WebSocket subscribe message, update format (snapshot vs incremental), heartbeat/ping.
-5. Whether order book / WebSocket prices include size at each price (liquidity guard).
-6. Market endpoints: list games, list markets, order book (paths + example
-   responses), plus the full `GET /api/markets/{marketId}` response shape.
-   The claim path is `/api/real/...` while the market path is `/api/markets/...`:
-   confirm `/api/markets/*` returns REAL-money markets, not paper.
-7. Rate limits.
-8. Fee structure: flat per contract vs % of winnings, and how much.
+1. `<api-host>` for the WebSocket: confirm it is `api.empiresportsexchange.com`.
+2. Real money vs paper: confirm `esx_live_` keys and `/api/markets/*` /
+   `/v1/marketdata` are real-money (the claim path is `/api/real/...`).
+3. "Market Data" section: listGames / listMarkets / getMarket paths and example
+   responses: `marketIdStr`, outcome ids and names, sport, league, market type,
+   line, game start / live status (and game clock if available).
+4. Whether those REST market endpoints need the login token or just the key
+   (if a token is needed: lifetime, refresh, exact Authorization format).
+5. REST rate limits.
+6. Fee structure: flat per contract vs % of winnings, and how much.
