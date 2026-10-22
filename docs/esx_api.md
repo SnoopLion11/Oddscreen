@@ -150,6 +150,19 @@ snapshot per market, through a client-side limiter capped at 20 req/s
 (headroom under 25/s) with back-off on 429. It makes no trading calls, so the
 200/min IP budget is untouched.
 
+## Errors relevant to the screen (from "Common Errors")
+
+| Error | Screen behaviour |
+|---|---|
+| API key required / Invalid API key | Fatal config error: show on the ESX pill, stop reconnecting until `.env` is fixed. |
+| Token required / Token expired | Refresh the login token (if REST lookups need it) and retry once. |
+| API key does not belong to user | Fatal config error: key and login must be the same account. |
+| Market is closed / `market_closed` | Remove that market's rows; not a feed fault, no reconnect. |
+| 429 | Back off for the window, then retry (REST only). |
+
+All other listed errors are about orders, cancels, positions or claims, which
+the screen never calls.
+
 ## Settled
 
 - REST base URL: `https://api.empiresportsexchange.com` (key prefix `esx_live_`).
