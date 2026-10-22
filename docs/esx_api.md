@@ -1,5 +1,7 @@
 # ESX trading API: overview (as provided)
 
+Full verbatim copy of every pasted section: [esx_api_reference_raw.md](esx_api_reference_raw.md).
+
 Source: ESX "Real trading API docs" overview, pasted by the user. This is the
 overview only; it does not include endpoints, URLs, message formats, rate
 limits or fees. See "Missing" below.
