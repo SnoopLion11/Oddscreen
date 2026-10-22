@@ -150,6 +150,21 @@ snapshot per market, through a client-side limiter capped at 20 req/s
 (headroom under 25/s) with back-off on 429. It makes no trading calls, so the
 200/min IP budget is untouched.
 
+## Endpoint allowlist (from the Input/Output Reference)
+
+The ESX client may call ONLY these (all GET) plus the market-data WebSocket:
+
+- `GET /api/markets/games`
+- `GET /api/markets/markets` (listMarkets; response shape not yet documented)
+- `GET /api/markets/ids`
+- `GET /api/markets/{marketId}`
+- `GET /api/markets/{marketId}/orderbook`
+- `wss://<api-host>/v1/marketdata`
+
+Everything else in the reference is refused in code: every
+`/api/blockchain-trading/*` path (place, cancel, cancel-all, claim-all,
+sync-balance, order reads), `/api/real/summary`, `/api/real/markets/:id/claim`.
+
 ## Errors relevant to the screen (from "Common Errors")
 
 | Error | Screen behaviour |
