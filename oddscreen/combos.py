@@ -38,10 +38,12 @@ def game_key(event_ticker: str) -> str:
     """Game identifier shared by every event of one game.
 
     Kalshi event tickers are SERIES-GAMEID, e.g. KXNFLGAME-25OCT26KCLV and
-    KXNFLTOTAL-25OCT26KCLV: the series differs per market type, the part
-    after the first dash identifies the game.
+    KXNFLTOTAL-25OCT26KCLV: the series differs per market type, the second
+    segment identifies the game. Some props add a team suffix
+    (KXNFLTEAMFIRSTTD-26OCT25PITNO-PIT), so later segments are dropped.
     """
-    return event_ticker.split("-", 1)[1] if "-" in event_ticker else event_ticker
+    parts = event_ticker.split("-")
+    return parts[1] if len(parts) > 1 else event_ticker
 
 
 def independent(legs: Sequence[Leg]) -> bool:

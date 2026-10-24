@@ -12,7 +12,8 @@ Run on your own machine:
   python scripts/kalshi_rfq_recorder.py --combos combos.json
 
   # random cross-game combos from one collection
-  python scripts/kalshi_rfq_recorder.py --collection <COLLECTION_TICKER> --auto 20 --legs 2
+  python scripts/kalshi_rfq_recorder.py --collection KXMVESPORTSMULTIGAMEEXTENDED-R \
+      --series KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL --within-hours 48 --auto 20 --legs 2
 
   # list open combo collections
   python scripts/kalshi_rfq_recorder.py --list-collections
@@ -134,16 +135,48 @@ def record_one(client, collection: str, legs: list[Leg], args) -> tuple[dict, di
 
 # --- auto combo generation ---------------------------------------------------
 
-def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: int, rng: random.Random):
+def _ts(s: str) -> float:
+    return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+
+
+def group_by_game(events: list[dict], markets: list[dict], within_hours: float | None = None,
+                  now: float | None = None) -> dict[str, list[tuple[dict, dict]]]:
+    """Open markets of the collection's events, grouped by game.
+
+    Markets whose event is not in the collection are dropped. With
+    within_hours, only markets expected to settle within that many hours
+    (expected_expiration_time; close_time is days after the game) are kept.
+    """
+    by_event = {ev["ticker"]: ev for ev in events}
+    now = time.time() if now is None else now
+    out: dict[str, list[tuple[dict, dict]]] = {}
+    for m in markets:
+        ev = by_event.get(m.get("event_ticker"))
+        if ev is None:
+            continue
+        if within_hours is not None:
+            when = m.get("expected_expiration_time") or m.get("occurrence_datetime") or m.get("close_time")
+            if not when or not now < _ts(when) <= now + within_hours * 3600:
+                continue
+        out.setdefault(combos.game_key(ev["ticker"]), []).append((ev, m))
+    return out
+
+
+def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: int, rng: random.Random,
+                series: list[str] | None = None, within_hours: float | None = None):
     col = client.collection(collection_ticker)
-    lo, hi = col.get("size_min") or 2, col.get("size_max") or n_legs
+    lo, hi = col.get("size_min") or 2, col.get("size_max") or n_legs   # size_max 0 = no limit
     if not lo <= n_legs <= hi:
         raise SystemExit(f"{collection_ticker} takes {lo}-{hi} legs, not {n_legs}")
     events = col.get("associated_events") or [{"ticker": t} for t in col.get("associated_event_tickers", [])]
-    by_game: dict[str, list[tuple[dict, dict]]] = {}
-    for ev in events:
-        for m in client.markets(event_ticker=ev["ticker"], status="open"):
-            by_game.setdefault(combos.game_key(ev["ticker"]), []).append((ev, m))
+    if series:
+        markets = [m for s in series for m in client.markets(series_ticker=s, status="open")]
+    elif len(events) > 200:
+        raise SystemExit(f"{collection_ticker} has {len(events)} events; pick some with --series, "
+                         "e.g. --series KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL")
+    else:
+        markets = [m for ev in events for m in client.markets(event_ticker=ev["ticker"], status="open")]
+    by_game = group_by_game(events, markets, within_hours)
     games = list(by_game)
     if len(games) < n_legs:
         raise SystemExit(f"{collection_ticker} has {len(games)} open games; need {n_legs} for cross-game combos")
@@ -176,6 +209,10 @@ def main() -> int:
     src.add_argument("--list-collections", action="store_true", help="print open combo collections and exit")
     ap.add_argument("--auto", type=int, default=10, help="with --collection: number of combos")
     ap.add_argument("--legs", type=int, default=2, help="with --collection: legs per combo")
+    ap.add_argument("--series", help="with --collection: comma-separated series to draw legs from, "
+                    "e.g. KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL")
+    ap.add_argument("--within-hours", type=float, default=None,
+                    help="with --collection: only legs expected to settle within this many hours")
     ap.add_argument("--contracts", type=int, default=10, help="RFQ size in contracts")
     ap.add_argument("--wait", type=float, default=8.0, help="seconds to collect quotes per RFQ")
     ap.add_argument("--poll", type=float, default=0.5, help="seconds between quote polls")
@@ -204,7 +241,9 @@ def main() -> int:
         return 0
 
     rng = random.Random(args.seed)
-    todo = load_combos(args.combos) if args.combos else auto_combos(client, args.collection, args.auto, args.legs, rng)
+    todo = load_combos(args.combos) if args.combos else auto_combos(
+        client, args.collection, args.auto, args.legs, rng,
+        [x.strip() for x in args.series.split(",") if x.strip()] if args.series else None, args.within_hours)
 
     LOGS.mkdir(exist_ok=True)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
