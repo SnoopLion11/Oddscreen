@@ -1,6 +1,6 @@
 """Kalshi Trade API v2 client for the log-only combo RFQ recorder.
 
-Confirmed from docs.kalshi.com (see docs/kalshi_api.md):
+Confirmed from docs.kalshi.com and live runs (see docs/kalshi_api.md):
   - Signing: KALSHI-ACCESS-KEY / -TIMESTAMP (ms) / -SIGNATURE headers.
     Signed string = timestamp + METHOD + full path from root
     (e.g. /trade-api/v2/communications/rfqs), query string stripped.
@@ -212,8 +212,14 @@ class Client:
             "rest_remainder": False,
         })
 
+    def rfq(self, rfq_id: str) -> dict:
+        page = self.request("GET", f"/communications/rfqs/{rfq_id}")
+        return page.get("rfq") or page
+
     def quotes(self, rfq_id: str) -> list[dict]:
-        return self.request("GET", "/communications/quotes", {"rfq_id": rfq_id}).get("quotes", [])
+        # Kalshi 403s this call without a user filter; "self" = quotes on our own RFQs.
+        params = {"rfq_id": rfq_id, "rfq_user_filter": "self"}
+        return self.request("GET", "/communications/quotes", params).get("quotes", [])
 
     def delete_rfq(self, rfq_id: str) -> None:
         self.request("DELETE", f"/communications/rfqs/{rfq_id}")

@@ -64,3 +64,20 @@ def test_auto_combos_fetches_per_series_and_builds_cross_game_combos():
     assert len(out) == 3
     for _, legs in out:
         assert combos.independent(legs)
+
+
+
+def test_quotes_are_filtered_to_our_own_rfqs():
+    from cryptography.hazmat.primitives.asymmetric import ed25519
+    from oddscreen import kalshi
+    c = kalshi.Client(kalshi.Signer("k", ed25519.Ed25519PrivateKey.generate()))
+    calls = []
+    c.request = lambda method, path, params=None, body=None: calls.append((method, path, params)) or {"quotes": [{"id": "q1"}]}
+    assert c.quotes("r1") == [{"id": "q1"}]
+    assert calls == [("GET", "/communications/quotes", {"rfq_id": "r1", "rfq_user_filter": "self"})]
+
+
+def test_zero_bid_means_side_not_quoted():
+    raw = {"yes_bid_dollars": "0.0910", "no_bid_dollars": "0.0000"}
+    assert rec.quote_bid(raw, "yes_bid") == 0.091
+    assert rec.quote_bid(raw, "no_bid") is None

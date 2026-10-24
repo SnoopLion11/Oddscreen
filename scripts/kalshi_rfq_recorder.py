@@ -69,6 +69,12 @@ def price_legs(client: kalshi.Client, legs: list[Leg], min_size: float) -> tuple
     return fairs, books
 
 
+def quote_bid(raw: dict, name: str):
+    """A quote's bid in dollars; None when that side is not quoted (Kalshi sends "0.0000")."""
+    v = kalshi.dollars(raw, name)
+    return v if v else None
+
+
 def collect_quotes(client: kalshi.Client, rfq_id: str, t0: float, wait_s: float, poll_s: float):
     seen: dict[str, tuple[Quote, dict]] = {}
     end = t0 + wait_s
@@ -77,7 +83,7 @@ def collect_quotes(client: kalshi.Client, rfq_id: str, t0: float, wait_s: float,
             if raw.get("rfq_id", rfq_id) != rfq_id:
                 continue
             qid = str(raw.get("id") or raw.get("quote_id"))
-            yb, nb = kalshi.dollars(raw, "yes_bid"), kalshi.dollars(raw, "no_bid")
+            yb, nb = quote_bid(raw, "yes_bid"), quote_bid(raw, "no_bid")
             prev = seen.get(qid)
             if prev and (prev[0].yes_bid, prev[0].no_bid) == (yb, nb):
                 continue
@@ -88,12 +94,23 @@ def collect_quotes(client: kalshi.Client, rfq_id: str, t0: float, wait_s: float,
 
 
 def record_one(client, collection: str, legs: list[Leg], args) -> tuple[dict, dict]:
-    ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    """Returns (csv row, raw record). A Kalshi error mid-way is stored in both,
+    keeping whatever was already recorded."""
     row = {k: "" for k in CSV_FIELDS}
+    raw: dict = {}
+    try:
+        _record(client, collection, legs, args, row, raw)
+    except kalshi.KalshiError as e:
+        row["error"] = raw["error"] = str(e)
+    return row, raw
+
+
+def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict) -> None:
+    ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
     row.update(ts=ts, collection=collection, n_legs=len(legs), contracts=args.contracts,
                legs=" & ".join(f"{l.market_ticker}:{l.side}" for l in legs),
                independent=combos.independent(legs))
-    raw: dict = {"ts": ts, "collection": collection, "legs": [l.as_api() for l in legs]}
+    raw.update(ts=ts, collection=collection, legs=[l.as_api() for l in legs])
 
     fairs, books = price_legs(client, legs, args.min_size)
     raw["books"] = books
@@ -107,6 +124,7 @@ def record_one(client, collection: str, legs: list[Leg], args) -> tuple[dict, di
     raw["combo"] = combo
 
     rfq = client.create_rfq(ticker, args.contracts)
+    raw["rfq_create"] = rfq
     rfq_id = str(rfq.get("id") or rfq.get("rfq_id") or (rfq.get("rfq") or {}).get("id"))
     row["rfq_id"] = rfq_id
     t0 = time.monotonic()
@@ -130,7 +148,6 @@ def record_one(client, collection: str, legs: list[Leg], args) -> tuple[dict, di
             f"{name}_ev_pct": _r(r.ev_pct_fair, 2), f"{name}_ev_pct_prefee": _r(r.ev_pct_fair_prefee, 2),
             f"{name}_consensus": _r(r.consensus), f"{name}_edge_vs_consensus_c": _r(r.edge_vs_consensus_c, 2),
         })
-    return row, raw
 
 
 # --- auto combo generation ---------------------------------------------------
@@ -256,14 +273,7 @@ def main() -> int:
         for i, (collection, legs) in enumerate(todo, 1):
             if i > 1:
                 time.sleep(args.gap)
-            try:
-                row, raw = record_one(client, collection, legs, args)
-            except kalshi.KalshiError as e:
-                row = {k: "" for k in CSV_FIELDS}
-                row.update(ts=datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
-                           collection=collection, n_legs=len(legs), error=str(e),
-                           legs=" & ".join(f"{l.market_ticker}:{l.side}" for l in legs))
-                raw = {"ts": row["ts"], "collection": collection, "legs": [l.as_api() for l in legs], "error": str(e)}
+            row, raw = record_one(client, collection, legs, args)
             w.writerow(row)
             jf.write(json.dumps(raw, default=str) + "\n")
             cf.flush()
