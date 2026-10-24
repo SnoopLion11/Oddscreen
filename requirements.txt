@@ -1,3 +1,4 @@
 shin==0.2.2      # independent Shin implementation used by verify_devig.py
 pytest>=8
 websockets>=13   # ESX / Kalshi / browser websockets
+cryptography>=42 # Kalshi request signing (RSA-PSS / Ed25519)
