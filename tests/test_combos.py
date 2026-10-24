@@ -164,3 +164,13 @@ def test_dollars_reads_dollar_strings_and_legacy_cents():
     assert kalshi.dollars({"yes_bid_dollars": "0.2300"}, "yes_bid") == pytest.approx(0.23)
     assert kalshi.dollars({"yes_bid": 23}, "yes_bid") == pytest.approx(0.23)
     assert kalshi.dollars({}, "yes_bid") is None
+
+
+def test_signer_loads_pem_text_including_one_line_escaped_form():
+    from cryptography.hazmat.primitives import serialization
+    key = ed25519.Ed25519PrivateKey.generate()
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    for text in (pem, pem.replace("\n", "\\n")):
+        sig = base64.b64decode(kalshi.Signer.from_pem("k", text).sign("1", "GET", "/x"))
+        key.public_key().verify(sig, b"1GET/x")

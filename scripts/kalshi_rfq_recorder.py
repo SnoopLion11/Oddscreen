@@ -23,7 +23,8 @@ combos.json:
 
 Output (git-ignored): logs/combo_rfqs_<date>.csv (one row per RFQ) and
 logs/combo_rfqs_<date>.jsonl (raw legs, books and every quote).
-Needs KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH in .env.
+Needs KALSHI_API_KEY_ID plus either KALSHI_PRIVATE_KEY_PATH (a PEM file) or
+KALSHI_PRIVATE_KEY (the PEM text itself), in .env or the environment.
 """
 from __future__ import annotations
 
@@ -186,12 +187,15 @@ def main() -> int:
     args = ap.parse_args()
 
     env = kalshi.load_env(ROOT)
-    key_id, key_path = env.get("KALSHI_API_KEY_ID", ""), env.get("KALSHI_PRIVATE_KEY_PATH", "")
-    if not key_id or not key_path:
-        print("Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH in .env")
+    key_id = env.get("KALSHI_API_KEY_ID", "")
+    key_pem, key_path = env.get("KALSHI_PRIVATE_KEY", ""), env.get("KALSHI_PRIVATE_KEY_PATH", "")
+    if not key_id or not (key_pem or key_path):
+        print("Set KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY (PEM text) or KALSHI_PRIVATE_KEY_PATH")
         return 2
+    signer = (kalshi.Signer.from_pem(key_id, key_pem) if key_pem
+              else kalshi.Signer.from_pem_file(key_id, ROOT / key_path))
     base = kalshi.DEMO_BASE if args.demo else env.get("KALSHI_API_URL", kalshi.DEFAULT_BASE)
-    client = kalshi.Client(kalshi.Signer.from_pem_file(key_id, ROOT / key_path), base)
+    client = kalshi.Client(signer, base)
     print(f"Kalshi {base}  (log-only: quotes are never accepted)")
 
     if args.list_collections:

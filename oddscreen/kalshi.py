@@ -70,9 +70,15 @@ class Signer:
         self._key = private_key
 
     @classmethod
+    def from_pem(cls, key_id: str, pem: str | bytes) -> "Signer":
+        if isinstance(pem, str):
+            # Env vars often carry the PEM on one line with literal "\n".
+            pem = pem.strip().replace("\\n", "\n").encode()
+        return cls(key_id, serialization.load_pem_private_key(pem, password=None))
+
+    @classmethod
     def from_pem_file(cls, key_id: str, path: str | Path) -> "Signer":
-        data = Path(path).read_bytes()
-        return cls(key_id, serialization.load_pem_private_key(data, password=None))
+        return cls.from_pem(key_id, Path(path).read_bytes())
 
     def sign(self, timestamp_ms: str, method: str, full_path: str) -> str:
         msg = (timestamp_ms + method + full_path.split("?", 1)[0]).encode()
