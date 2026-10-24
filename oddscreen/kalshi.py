@@ -71,10 +71,7 @@ class Signer:
 
     @classmethod
     def from_pem(cls, key_id: str, pem: str | bytes) -> "Signer":
-        if isinstance(pem, str):
-            # Env vars often carry the PEM on one line with literal "\n".
-            pem = pem.strip().replace("\\n", "\n").encode()
-        return cls(key_id, serialization.load_pem_private_key(pem, password=None))
+        return cls(key_id, serialization.load_pem_private_key(normalize_pem(pem), password=None))
 
     @classmethod
     def from_pem_file(cls, key_id: str, path: str | Path) -> "Signer":
@@ -99,6 +96,19 @@ class Signer:
             "KALSHI-ACCESS-TIMESTAMP": ts,
             "KALSHI-ACCESS-SIGNATURE": self.sign(ts, method, full_path),
         }
+
+
+def normalize_pem(pem: str | bytes) -> bytes:
+    """Rebuild a PEM pasted into a settings box that mangled its line breaks
+    (joined onto one line, newlines turned into spaces or a literal "\\n")."""
+    text = pem.decode() if isinstance(pem, bytes) else pem
+    text = text.replace("\\n", "\n").strip().strip('"').strip("'")
+    m = re.search(r"-----BEGIN ([A-Z0-9 ]+)-----(.*?)-----END \1-----", text, re.S)
+    if not m:
+        raise ValueError("private key text has no -----BEGIN ...----- / -----END ...----- lines")
+    body = re.sub(r"\s+", "", m.group(2))
+    lines = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+    return f"-----BEGIN {m.group(1)}-----\n{lines}\n-----END {m.group(1)}-----\n".encode()
 
 
 # --- REST -------------------------------------------------------------------

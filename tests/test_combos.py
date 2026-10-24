@@ -171,6 +171,19 @@ def test_signer_loads_pem_text_including_one_line_escaped_form():
     key = ed25519.Ed25519PrivateKey.generate()
     pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
                             serialization.NoEncryption()).decode()
-    for text in (pem, pem.replace("\n", "\\n")):
+    mangled = (pem, pem.replace("\n", "\\n"), pem.replace("\n", " "), " ".join(pem.split()), f'"{pem}"')
+    for text in mangled:
         sig = base64.b64decode(kalshi.Signer.from_pem("k", text).sign("1", "GET", "/x"))
         key.public_key().verify(sig, b"1GET/x")
+
+
+def test_rsa_pem_survives_being_flattened():
+    from cryptography.hazmat.primitives import serialization
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.TraditionalOpenSSL,
+                            serialization.NoEncryption()).decode()
+    s = kalshi.Signer.from_pem("k", pem.replace("\n", " "))
+    sig = base64.b64decode(s.sign("1", "GET", "/x"))
+    key.public_key().verify(sig, b"1GET/x",
+                            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+                            hashes.SHA256())
