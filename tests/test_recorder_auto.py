@@ -81,3 +81,20 @@ def test_zero_bid_means_side_not_quoted():
     raw = {"yes_bid_dollars": "0.0910", "no_bid_dollars": "0.0000"}
     assert rec.quote_bid(raw, "yes_bid") == 0.091
     assert rec.quote_bid(raw, "no_bid") is None
+
+
+def test_same_game_puts_k_legs_in_one_game_from_different_events():
+    g = rec.group_by_game(EVENTS, MARKETS, now=NOW)
+    for seed in range(20):
+        legs = rec.sample_legs(g, 3, 2, rec.random.Random(seed))
+        keys = [combos.game_key(l.event_ticker) for l in legs]
+        assert keys.count("26OCT25PITNO") == 2 and "26NOV01BALBUF" in keys
+        assert len({l.event_ticker for l in legs}) == 3
+        assert not combos.independent(legs)
+
+
+def test_csv_log_path_skips_file_with_old_columns(tmp_path):
+    (tmp_path / "combo_rfqs_20261024.csv").write_text("ts,old\n")
+    assert rec.csv_log_path(tmp_path, "20261024").name == "combo_rfqs_20261024_2.csv"
+    (tmp_path / "combo_rfqs_20261024_2.csv").write_text(",".join(rec.CSV_FIELDS) + "\n")
+    assert rec.csv_log_path(tmp_path, "20261024").name == "combo_rfqs_20261024_2.csv"

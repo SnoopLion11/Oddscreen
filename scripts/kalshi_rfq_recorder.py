@@ -48,7 +48,7 @@ LOGS = ROOT / "logs"
 
 CSV_FIELDS = [
     "ts", "collection", "combo_ticker", "rfq_id", "n_legs", "legs", "independent",
-    "leg_fairs", "fair", "contracts", "n_quotes", "n_quoters", "consensus_mid", "mid_spread_c",
+    "leg_fairs", "fair", "naive_fair", "contracts", "n_quotes", "n_quoters", "consensus_mid", "mid_spread_c",
     "yes_cost", "yes_creator", "yes_fee", "yes_ev_pct", "yes_ev_pct_prefee", "yes_consensus", "yes_edge_vs_consensus_c",
     "no_cost", "no_creator", "no_fee", "no_ev_pct", "no_ev_pct_prefee", "no_consensus", "no_edge_vs_consensus_c",
     "first_quote_s", "error",
@@ -117,6 +117,7 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
     fair = combos.combo_fair(fairs) if row["independent"] else None
     row["leg_fairs"] = " ".join("-" if f is None else f"{f.fair:.4f}" for f in fairs)
     row["fair"] = _r(fair)
+    row["naive_fair"] = _r(combos.combo_fair(fairs))   # product even for same-game legs (ignores correlation)
 
     combo = client.create_combo_market(collection, [l.as_api() for l in legs])
     ticker = combo.get("market_ticker") or (combo.get("market") or {}).get("ticker")
@@ -179,8 +180,27 @@ def group_by_game(events: list[dict], markets: list[dict], within_hours: float |
     return out
 
 
+def sample_legs(by_game: dict[str, list[tuple[dict, dict]]], n_legs: int, same_game: int,
+                rng: random.Random) -> list[Leg]:
+    """n_legs legs: `same_game` of them from one game (each from a different
+    event, e.g. moneyline + total), the rest from other games, one each."""
+    def leg(ev, m):
+        return Leg(m["ticker"], ev["ticker"], "yes" if ev.get("is_yes_only") else rng.choice(["yes", "no"]))
+
+    legs, games = [], list(by_game)
+    if same_game > 1:
+        events = lambda g: {ev["ticker"] for ev, _ in by_game[g]}
+        g0 = rng.choice([g for g in games if len(events(g)) >= same_game])
+        for et in rng.sample(sorted(events(g0)), same_game):
+            legs.append(leg(*rng.choice([(ev, m) for ev, m in by_game[g0] if ev["ticker"] == et])))
+        games = [g for g in games if g != g0]
+    for g in rng.sample(games, n_legs - len(legs)):
+        legs.append(leg(*rng.choice(by_game[g])))
+    return legs
+
+
 def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: int, rng: random.Random,
-                series: list[str] | None = None, within_hours: float | None = None):
+                series: list[str] | None = None, within_hours: float | None = None, same_game: int = 1):
     col = client.collection(collection_ticker)
     lo, hi = col.get("size_min") or 2, col.get("size_max") or n_legs   # size_max 0 = no limit
     if not lo <= n_legs <= hi:
@@ -195,18 +215,22 @@ def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: i
         markets = [m for ev in events for m in client.markets(event_ticker=ev["ticker"], status="open")]
     by_game = group_by_game(events, markets, within_hours)
     games = list(by_game)
-    if len(games) < n_legs:
-        raise SystemExit(f"{collection_ticker} has {len(games)} open games; need {n_legs} for cross-game combos")
+    same_game = max(1, min(same_game, n_legs))
+    deep = [g for g in games if len({ev["ticker"] for ev, _ in by_game[g]}) >= same_game]
+    if not deep or len(games) < n_legs - same_game + 1:
+        raise SystemExit(f"{collection_ticker}: not enough open games for {n_legs} legs with {same_game} from one game")
     print(f"{collection_ticker}: {len(games)} games, {sum(map(len, by_game.values()))} open leg markets")
-    out = []
-    for _ in range(n):
-        legs = []
-        for g in rng.sample(games, n_legs):
-            ev, m = rng.choice(by_game[g])
-            side = "yes" if ev.get("is_yes_only") else rng.choice(["yes", "no"])
-            legs.append(Leg(m["ticker"], ev["ticker"], side))
-        out.append((collection_ticker, legs))
-    return out
+    return [(collection_ticker, sample_legs(by_game, n_legs, same_game, rng)) for _ in range(n)]
+
+
+def csv_log_path(logs: Path, day: str) -> Path:
+    """Today's CSV, or combo_rfqs_<day>_2.csv etc. if an older one has different columns."""
+    header = ",".join(CSV_FIELDS)
+    for i in range(1, 100):
+        p = logs / (f"combo_rfqs_{day}.csv" if i == 1 else f"combo_rfqs_{day}_{i}.csv")
+        if not p.exists() or p.open().readline().strip() == header:
+            return p
+    raise SystemExit("too many CSV logs for today")
 
 
 def load_combos(path: Path):
@@ -228,6 +252,8 @@ def main() -> int:
     ap.add_argument("--legs", type=int, default=2, help="with --collection: legs per combo")
     ap.add_argument("--series", help="with --collection: comma-separated series to draw legs from, "
                     "e.g. KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL")
+    ap.add_argument("--same-game", type=int, default=1,
+                    help="with --collection: how many legs come from one game (correlated); 1 = all different games")
     ap.add_argument("--within-hours", type=float, default=None,
                     help="with --collection: only legs expected to settle within this many hours")
     ap.add_argument("--contracts", type=int, default=10, help="RFQ size in contracts")
@@ -260,11 +286,12 @@ def main() -> int:
     rng = random.Random(args.seed)
     todo = load_combos(args.combos) if args.combos else auto_combos(
         client, args.collection, args.auto, args.legs, rng,
-        [x.strip() for x in args.series.split(",") if x.strip()] if args.series else None, args.within_hours)
+        [x.strip() for x in args.series.split(",") if x.strip()] if args.series else None, args.within_hours,
+        args.same_game)
 
     LOGS.mkdir(exist_ok=True)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
-    csv_path, jsonl_path = LOGS / f"combo_rfqs_{day}.csv", LOGS / f"combo_rfqs_{day}.jsonl"
+    csv_path, jsonl_path = csv_log_path(LOGS, day), LOGS / f"combo_rfqs_{day}.jsonl"
     new_csv = not csv_path.exists()
     with csv_path.open("a", newline="") as cf, jsonl_path.open("a") as jf:
         w = csv.DictWriter(cf, fieldnames=CSV_FIELDS)
