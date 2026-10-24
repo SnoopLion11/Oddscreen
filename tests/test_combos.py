@@ -187,3 +187,13 @@ def test_rsa_pem_survives_being_flattened():
     key.public_key().verify(sig, b"1GET/x",
                             padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
                             hashes.SHA256())
+
+
+def test_signer_loads_bare_key_body_without_begin_end_lines():
+    from cryptography.hazmat.primitives import serialization
+    key = ed25519.Ed25519PrivateKey.generate()
+    pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                            serialization.NoEncryption()).decode()
+    body = pem.splitlines()[1]                     # the one middle line
+    sig = base64.b64decode(kalshi.Signer.from_pem("k", body).sign("1", "GET", "/x"))
+    key.public_key().verify(sig, b"1GET/x")

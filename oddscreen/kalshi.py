@@ -71,7 +71,12 @@ class Signer:
 
     @classmethod
     def from_pem(cls, key_id: str, pem: str | bytes) -> "Signer":
-        return cls(key_id, serialization.load_pem_private_key(normalize_pem(pem), password=None))
+        text = pem.decode() if isinstance(pem, bytes) else pem
+        if "-----BEGIN" not in text:
+            # Just the key's base64 body (e.g. the single middle line of an Ed25519 key file).
+            der = base64.b64decode(re.sub(r"\s+|\\n", "", text).strip("\"'"))
+            return cls(key_id, serialization.load_der_private_key(der, password=None))
+        return cls(key_id, serialization.load_pem_private_key(normalize_pem(text), password=None))
 
     @classmethod
     def from_pem_file(cls, key_id: str, path: str | Path) -> "Signer":
