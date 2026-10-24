@@ -197,3 +197,8 @@ def test_signer_loads_bare_key_body_without_begin_end_lines():
     body = pem.splitlines()[1]                     # the one middle line
     sig = base64.b64decode(kalshi.Signer.from_pem("k", body).sign("1", "GET", "/x"))
     key.public_key().verify(sig, b"1GET/x")
+
+
+def test_leg_fair_rejects_a_market_with_an_empty_side():
+    assert combos.leg_fair("yes", 0.18, 0.99, max_vig=0.06) is None
+    assert combos.leg_fair("yes", 0.52, 0.51, max_vig=0.06) is not None

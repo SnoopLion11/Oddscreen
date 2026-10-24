@@ -62,13 +62,17 @@ class LegFair:
 
 
 def leg_fair(side: str, yes_ask: Optional[float], no_ask: Optional[float],
-             yes_size: float = 0.0, no_size: float = 0.0, min_size: float = 0.0) -> Optional[LegFair]:
-    """De-vig one Kalshi binary market from its own two asks. None if unpriceable."""
+             yes_size: float = 0.0, no_size: float = 0.0, min_size: float = 0.0,
+             max_vig: Optional[float] = None) -> Optional[LegFair]:
+    """De-vig one Kalshi binary market from its own two asks. None if unpriceable,
+    or if yes_ask + no_ask - 1 exceeds max_vig (an empty side, e.g. NO at 0.99)."""
     if yes_ask is None or no_ask is None:
         return None
     if not (devig.valid_price(yes_ask) and devig.valid_price(no_ask)):
         return None
     if yes_size < min_size or no_size < min_size:
+        return None
+    if max_vig is not None and yes_ask + no_ask - 1.0 > max_vig + 1e-9:
         return None
     sides = devig.devig_market([yes_ask, no_ask])
     if sides is None:

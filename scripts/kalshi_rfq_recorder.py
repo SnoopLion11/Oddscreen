@@ -59,13 +59,14 @@ def _r(x, n=4):
     return "" if x is None else round(x, n)
 
 
-def price_legs(client: kalshi.Client, legs: list[Leg], min_size: float) -> tuple[list, list]:
+def price_legs(client: kalshi.Client, legs: list[Leg], min_size: float,
+               max_vig: float | None = None) -> tuple[list, list]:
     fairs, books = [], []
     for leg in legs:
         ob = client.orderbook(leg.market_ticker)
         ya, ys, na, ns = kalshi.best_asks(ob)
         books.append({"market_ticker": leg.market_ticker, "yes_ask": ya, "yes_size": ys, "no_ask": na, "no_size": ns})
-        fairs.append(combos.leg_fair(leg.side, ya, na, ys, ns, min_size))
+        fairs.append(combos.leg_fair(leg.side, ya, na, ys, ns, min_size, max_vig))
     return fairs, books
 
 
@@ -112,7 +113,7 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
                independent=combos.independent(legs))
     raw.update(ts=ts, collection=collection, legs=[l.as_api() for l in legs])
 
-    fairs, books = price_legs(client, legs, args.min_size)
+    fairs, books = price_legs(client, legs, args.min_size, args.max_vig)
     raw["books"] = books
     fair = combos.combo_fair(fairs) if row["independent"] else None
     row["leg_fairs"] = " ".join("-" if f is None else f"{f.fair:.4f}" for f in fairs)
@@ -261,6 +262,8 @@ def main() -> int:
     ap.add_argument("--poll", type=float, default=0.5, help="seconds between quote polls")
     ap.add_argument("--gap", type=float, default=15.0, help="seconds between RFQs")
     ap.add_argument("--min-size", type=float, default=0.0, help="min contracts at a leg's best ask to price it")
+    ap.add_argument("--max-vig", type=float, default=0.06,
+                    help="don't price a leg whose YES ask + NO ask exceeds 1 by more than this")
     ap.add_argument("--fee-mult", type=float, default=1.0, help="taker fee multiplier; 0 = ignore fees")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--demo", action="store_true", help="use Kalshi's demo environment")
