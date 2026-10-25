@@ -108,3 +108,15 @@ def test_pregame_filter_uses_close_time_minus_48h():
     g = rec.group_by_game(EVENTS, ms, now=NOW, pregame_minutes=20)
     assert [m["ticker"] for _, m in g["26OCT25PITNO"]] == ["KXNFLTOTAL-26OCT25PITNO-44"]
     assert "26NOV01BALBUF" in g
+
+
+def test_report_groups_by_how_many_legs_share_a_game():
+    spec = importlib.util.spec_from_file_location(
+        "rfq_report", Path(__file__).resolve().parent.parent / "scripts" / "rfq_report.py")
+    rep = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rep)
+    legs = [{"event_ticker": e} for e in ("KXNBAGAME-26OCT24MIACHA", "KXNBATOTAL-26OCT24MIACHA", "KXNBAPTS-26OCT24WASCHI")]
+    assert rep.group_label(legs) == "3 legs, 2 from one game"
+    assert rep.group_label(legs[:2]) == "2 legs, same game"
+    assert rep.sport(legs) == "NBA"
+    assert rep.costs([{"creator_id": "a", "yes_bid_dollars": "0.30", "no_bid_dollars": "0.0000"}]) == {"yes": {}, "no": {"a": 0.7}}

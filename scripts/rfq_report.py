@@ -2,6 +2,7 @@
 
   python scripts/rfq_report.py                 # all logs/combo_rfqs_*.jsonl
   python scripts/rfq_report.py --since 2026-10-25
+  python scripts/rfq_report.py --export out/   # rfqs.csv + quoters.csv for the results page
 
 Groups combos by how many legs share one game (1 = all different games),
 then reports quoter counts, how far apart quoters are, and per quoter how
@@ -12,11 +13,14 @@ for: that is a quoter pricing correlation differently.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import statistics as st
 import sys
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -50,11 +54,78 @@ def same_game_size(legs: list[dict]) -> int:
     return max(keys.count(k) for k in keys)
 
 
+def group_label(legs: list[dict]) -> str:
+    k = same_game_size(legs)
+    if k == 1:
+        return f"{len(legs)} legs, different games"
+    if k == len(legs):
+        return f"{len(legs)} legs, same game"
+    return f"{len(legs)} legs, {k} from one game"
+
+
+def sport(legs: list[dict]) -> str:
+    t = legs[0]["event_ticker"]
+    for name in ("NBA", "NFL", "NHL", "MLB", "NCAAF", "NCAAB"):
+        if t.startswith("KX" + name):
+            return name
+    return "other"
+
+
+def num(row: dict, k: str):
+    v = row.get(k, "")
+    return "" if v in ("", None) else float(v)
+
+
+def export(recs: list[dict], out: Path) -> None:
+    """rfqs.csv (one row per RFQ) and quoters.csv (per group and quoter)."""
+    out.mkdir(parents=True, exist_ok=True)
+    et = ZoneInfo("America/New_York")
+    rfq_rows, per = [], defaultdict(list)
+    for r in recs:
+        row, group = r.get("row") or {}, group_label(r["legs"])
+        cs = costs(r.get("quotes") or [])
+        gaps, edges = [], []
+        for side in ("yes", "no"):
+            vals = cs[side]
+            if len(vals) >= 2:
+                gaps.append((max(vals.values()) - min(vals.values())) * 100)
+            if len(vals) >= 3:
+                for c, v in vals.items():
+                    per[(group, c)].append((v - st.median([x for o, x in vals.items() if o != c])) * 100)
+                best = min(vals, key=vals.get)
+                edges.append((st.median([x for o, x in vals.items() if o != best]) - vals[best]) * 100)
+        cm, nf = num(row, "consensus_mid"), num(row, "naive_fair")
+        rfq_rows.append({
+            "ts": r["ts"],
+            "night": datetime.fromisoformat(r["ts"]).astimezone(et).strftime("%Y-%m-%d"),
+            "sport": sport(r["legs"]), "group": group, "n_legs": len(r["legs"]),
+            "legs": row.get("legs", ""), "quoted": int(bool(r.get("quotes"))), "error": int(bool(r.get("error"))),
+            "n_quoters": len({q.get("creator_id") for q in r.get("quotes") or []}),
+            "price_gap_c": round(max(gaps), 2) if gaps else "",
+            "best_vs_others_c": round(max(edges), 2) if edges else "",
+            "fair": num(row, "fair"), "naive_fair": nf, "consensus_mid": cm,
+            "quoted_vs_naive": round(cm / nf, 4) if cm and nf else "",
+            "yes_ev_pct": num(row, "yes_ev_pct"), "no_ev_pct": num(row, "no_ev_pct"),
+        })
+    with (out / "rfqs.csv").open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rfq_rows[0]))
+        w.writeheader()
+        w.writerows(rfq_rows)
+    with (out / "quoters.csv").open("w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["key", "group", "quoter", "sides", "mean_c", "median_c", "cheaper_share"])
+        w.writeheader()
+        for (group, c), v in sorted(per.items(), key=lambda t: (t[0][0], st.mean(t[1]))):
+            w.writerow({"key": f"{group}|{c[:8]}", "group": group, "quoter": c[:8], "sides": len(v),
+                        "mean_c": round(st.mean(v), 3), "median_c": round(st.median(v), 3),
+                        "cheaper_share": round(sum(x < 0 for x in v) / len(v), 4)})
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--since", default="", help="only RFQs at or after this ISO time/date (UTC)")
     ap.add_argument("--logs", type=Path, default=ROOT / "logs")
     ap.add_argument("--min-rfqs", type=int, default=10, help="min RFQs for a quoter to be listed")
+    ap.add_argument("--export", type=Path, help="also write rfqs.csv and quoters.csv to this folder")
     args = ap.parse_args()
 
     recs = []
@@ -66,6 +137,8 @@ def main() -> int:
     if not recs:
         print("no RFQs logged")
         return 0
+    if args.export:
+        export(recs, args.export)
 
     groups: dict[int, list[dict]] = defaultdict(list)
     for r in recs:

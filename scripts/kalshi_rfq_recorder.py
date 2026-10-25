@@ -318,6 +318,7 @@ def main() -> int:
             if i > 1:
                 time.sleep(args.gap)
             row, raw = record_one(client, collection, legs, args)
+            raw["row"] = row          # the CSV row too, so the .jsonl alone is a complete log
             w.writerow(row)
             jf.write(json.dumps(raw, default=str) + "\n")
             cf.flush()
