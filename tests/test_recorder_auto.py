@@ -98,3 +98,13 @@ def test_csv_log_path_skips_file_with_old_columns(tmp_path):
     assert rec.csv_log_path(tmp_path, "20261024").name == "combo_rfqs_20261024_2.csv"
     (tmp_path / "combo_rfqs_20261024_2.csv").write_text(",".join(rec.CSV_FIELDS) + "\n")
     assert rec.csv_log_path(tmp_path, "20261024").name == "combo_rfqs_20261024_2.csv"
+
+
+def test_pregame_filter_uses_close_time_minus_48h():
+    ms = [dict(m, close_time=c) for m, c in zip(MARKETS[:3], [
+        "2026-10-26T12:10:00Z",     # starts 12:10 on the 24th: 10 min away
+        "2026-10-26T13:00:00Z",     # starts in 1 h
+        "2026-11-03T21:00:00Z"])]   # next week
+    g = rec.group_by_game(EVENTS, ms, now=NOW, pregame_minutes=20)
+    assert [m["ticker"] for _, m in g["26OCT25PITNO"]] == ["KXNFLTOTAL-26OCT25PITNO-44"]
+    assert "26NOV01BALBUF" in g

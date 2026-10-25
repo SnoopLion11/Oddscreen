@@ -158,13 +158,20 @@ def _ts(s: str) -> float:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
 
 
+def game_start(m: dict) -> float | None:
+    """Scheduled start of a game market: close_time is set 48 h after it
+    (checked on NBA and NFL markets; the rules allow a 48 h postponement)."""
+    return _ts(m["close_time"]) - 48 * 3600 if m.get("close_time") else None
+
+
 def group_by_game(events: list[dict], markets: list[dict], within_hours: float | None = None,
-                  now: float | None = None) -> dict[str, list[tuple[dict, dict]]]:
+                  now: float | None = None, pregame_minutes: float | None = None) -> dict[str, list[tuple[dict, dict]]]:
     """Open markets of the collection's events, grouped by game.
 
     Markets whose event is not in the collection are dropped. With
     within_hours, only markets expected to settle within that many hours
     (expected_expiration_time; close_time is days after the game) are kept.
+    With pregame_minutes, only games starting at least that far ahead.
     """
     by_event = {ev["ticker"]: ev for ev in events}
     now = time.time() if now is None else now
@@ -176,6 +183,10 @@ def group_by_game(events: list[dict], markets: list[dict], within_hours: float |
         if within_hours is not None:
             when = m.get("expected_expiration_time") or m.get("occurrence_datetime") or m.get("close_time")
             if not when or not now < _ts(when) <= now + within_hours * 3600:
+                continue
+        if pregame_minutes is not None:
+            start = game_start(m)
+            if start is None or start < now + pregame_minutes * 60:
                 continue
         out.setdefault(combos.game_key(ev["ticker"]), []).append((ev, m))
     return out
@@ -201,7 +212,8 @@ def sample_legs(by_game: dict[str, list[tuple[dict, dict]]], n_legs: int, same_g
 
 
 def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: int, rng: random.Random,
-                series: list[str] | None = None, within_hours: float | None = None, same_game: int = 1):
+                series: list[str] | None = None, within_hours: float | None = None, same_game: int = 1,
+                pregame_minutes: float | None = None):
     col = client.collection(collection_ticker)
     lo, hi = col.get("size_min") or 2, col.get("size_max") or n_legs   # size_max 0 = no limit
     if not lo <= n_legs <= hi:
@@ -214,7 +226,7 @@ def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: i
                          "e.g. --series KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL")
     else:
         markets = [m for ev in events for m in client.markets(event_ticker=ev["ticker"], status="open")]
-    by_game = group_by_game(events, markets, within_hours)
+    by_game = group_by_game(events, markets, within_hours, pregame_minutes=pregame_minutes)
     games = list(by_game)
     same_game = max(1, min(same_game, n_legs))
     deep = [g for g in games if len({ev["ticker"] for ev, _ in by_game[g]}) >= same_game]
@@ -255,6 +267,8 @@ def main() -> int:
                     "e.g. KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL")
     ap.add_argument("--same-game", type=int, default=1,
                     help="with --collection: how many legs come from one game (correlated); 1 = all different games")
+    ap.add_argument("--pregame-minutes", type=float, default=None,
+                    help="with --collection: only games starting at least this many minutes from now")
     ap.add_argument("--within-hours", type=float, default=None,
                     help="with --collection: only legs expected to settle within this many hours")
     ap.add_argument("--contracts", type=int, default=10, help="RFQ size in contracts")
@@ -290,7 +304,7 @@ def main() -> int:
     todo = load_combos(args.combos) if args.combos else auto_combos(
         client, args.collection, args.auto, args.legs, rng,
         [x.strip() for x in args.series.split(",") if x.strip()] if args.series else None, args.within_hours,
-        args.same_game)
+        args.same_game, args.pregame_minutes)
 
     LOGS.mkdir(exist_ok=True)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
