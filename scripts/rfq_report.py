@@ -49,6 +49,34 @@ def costs(quotes: list[dict]) -> dict[str, dict[str, float]]:
     return out
 
 
+def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3) -> list[dict]:
+    """Lines worth a look on one logged RFQ.
+
+    kind "fair":   best price is at least `pct`% better than fair value after the
+                   fee (different-game combos only; same-game ones have no fair).
+    kind "quoter": cheapest quoter is at least `pct`% and `min_c` cents below the
+                   median of at least `min_others` other quoters.
+    """
+    out, row = [], rec.get("row") or {}
+    cs = costs(rec.get("quotes") or [])
+    for side in ("yes", "no"):
+        ev = row.get(f"{side}_ev_pct")
+        if ev not in (None, "") and float(ev) >= pct:
+            out.append({"kind": "fair", "side": side, "cost": float(row[f"{side}_cost"]), "ev_pct": float(ev),
+                        "quoter": (row.get(f"{side}_creator") or "")[:8]})
+        vals = cs[side]
+        if len(vals) >= min_others + 1:
+            best = min(vals, key=vals.get)
+            others = st.median([x for c, x in vals.items() if c != best])
+            gap = others - vals[best]
+            if gap * 100 >= min_c and gap / others * 100 >= pct:
+                out.append({"kind": "quoter", "side": side, "cost": vals[best], "others": others,
+                            "next_best": sorted(vals.values())[1],
+                            "gap_c": gap * 100, "gap_pct": gap / others * 100, "quoter": best[:8],
+                            "n_quoters": len(vals)})
+    return out
+
+
 def same_game_size(legs: list[dict]) -> int:
     keys = [combos.game_key(l["event_ticker"]) for l in legs]
     return max(keys.count(k) for k in keys)

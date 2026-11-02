@@ -120,3 +120,23 @@ def test_report_groups_by_how_many_legs_share_a_game():
     assert rep.group_label(legs[:2]) == "2 legs, same game"
     assert rep.sport(legs) == "NBA"
     assert rep.costs([{"creator_id": "a", "yes_bid_dollars": "0.30", "no_bid_dollars": "0.0000"}]) == {"yes": {}, "no": {"a": 0.7}}
+
+
+def test_expand_series_wildcard():
+    evs = [{"ticker": "KXNBAPTS-26NOV02A"}, {"ticker": "KXNBAGAME-26NOV02A"}, {"ticker": "KXNFLGAME-26NOV02B"}]
+    assert rec.expand_series(["KXNBA*", "KXNFLGAME"], evs) == ["KXNBAGAME", "KXNBAPTS", "KXNFLGAME"]
+
+
+def test_alerts_flag_cheap_quoter_and_fair_edge():
+    spec = importlib.util.spec_from_file_location(
+        "rfq_report", Path(__file__).resolve().parent.parent / "scripts" / "rfq_report.py")
+    rep = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rep)
+    q = lambda c, nb: {"creator_id": c, "yes_bid_dollars": "0.0000", "no_bid_dollars": nb}
+    rec_ = {"quotes": [q("a", "0.80"), q("b", "0.75"), q("c", "0.75"), q("d", "0.74")],
+            "row": {"yes_ev_pct": "12.0", "yes_cost": "0.2", "yes_creator": "a", "no_ev_pct": "-3"}}
+    kinds = {(a["kind"], a["side"]) for a in rep.alerts(rec_)}
+    assert kinds == {("fair", "yes"), ("quoter", "yes")}      # 0.20 vs others 0.25: 5c, 20%
+    rec_["quotes"][0] = q("a", "0.76")                          # 0.24 vs 0.25: 1c only
+    rec_["row"]["yes_ev_pct"] = "2"
+    assert rep.alerts(rec_) == []

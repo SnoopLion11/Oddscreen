@@ -211,29 +211,51 @@ def sample_legs(by_game: dict[str, list[tuple[dict, dict]]], n_legs: int, same_g
     return legs
 
 
+def expand_series(series: list[str], events: list[dict]) -> list[str]:
+    """"KXNBA*" becomes every series in the collection starting with KXNBA."""
+    have = sorted({ev["ticker"].split("-")[0] for ev in events})
+    out: list[str] = []
+    for s in series:
+        for x in ([h for h in have if h.startswith(s[:-1])] if s.endswith("*") else [s]):
+            if x not in out:
+                out.append(x)
+    return out
+
+
 def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: int, rng: random.Random,
                 series: list[str] | None = None, within_hours: float | None = None, same_game: int = 1,
-                pregame_minutes: float | None = None):
+                pregame_minutes: float | None = None, mix: list[tuple[int, int]] | None = None):
+    """n combos for each (legs, same_game) in mix (default: just n_legs, same_game)."""
+    mix = mix or [(n_legs, same_game)]
     col = client.collection(collection_ticker)
-    lo, hi = col.get("size_min") or 2, col.get("size_max") or n_legs   # size_max 0 = no limit
-    if not lo <= n_legs <= hi:
-        raise SystemExit(f"{collection_ticker} takes {lo}-{hi} legs, not {n_legs}")
+    lo = col.get("size_min") or 2
+    hi = col.get("size_max") or max(l for l, _ in mix)   # size_max 0 = no limit
+    for legs, _ in mix:
+        if not lo <= legs <= hi:
+            raise SystemExit(f"{collection_ticker} takes {lo}-{hi} legs, not {legs}")
     events = col.get("associated_events") or [{"ticker": t} for t in col.get("associated_event_tickers", [])]
     if series:
+        series = expand_series(series, events)
         markets = [m for s in series for m in client.markets(series_ticker=s, status="open")]
     elif len(events) > 200:
         raise SystemExit(f"{collection_ticker} has {len(events)} events; pick some with --series, "
-                         "e.g. --series KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL")
+                         "e.g. --series KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL or --series 'KXNBA*'")
     else:
         markets = [m for ev in events for m in client.markets(event_ticker=ev["ticker"], status="open")]
     by_game = group_by_game(events, markets, within_hours, pregame_minutes=pregame_minutes)
     games = list(by_game)
-    same_game = max(1, min(same_game, n_legs))
-    deep = [g for g in games if len({ev["ticker"] for ev, _ in by_game[g]}) >= same_game]
-    if not deep or len(games) < n_legs - same_game + 1:
-        raise SystemExit(f"{collection_ticker}: not enough open games for {n_legs} legs with {same_game} from one game")
     print(f"{collection_ticker}: {len(games)} games, {sum(map(len, by_game.values()))} open leg markets")
-    return [(collection_ticker, sample_legs(by_game, n_legs, same_game, rng)) for _ in range(n)]
+    out = []
+    for legs, same in mix:
+        same = max(1, min(same, legs))
+        deep = [g for g in games if len({ev["ticker"] for ev, _ in by_game[g]}) >= same]
+        if not deep or len(games) < legs - same + 1:
+            print(f"  skipped {legs} legs with {same} from one game: not enough open games")
+            continue
+        out += [(collection_ticker, sample_legs(by_game, legs, same, rng)) for _ in range(n)]
+    if not out:
+        raise SystemExit(f"{collection_ticker}: not enough open games")
+    return out
 
 
 def csv_log_path(logs: Path, day: str) -> Path:
@@ -265,6 +287,8 @@ def main() -> int:
     ap.add_argument("--legs", type=int, default=2, help="with --collection: legs per combo")
     ap.add_argument("--series", help="with --collection: comma-separated series to draw legs from, "
                     "e.g. KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL")
+    ap.add_argument("--mix", help="with --collection: several combo shapes as legs:same_game pairs, "
+                    "e.g. 2:2,2:1,3:3,3:1 (--auto combos of each)")
     ap.add_argument("--same-game", type=int, default=1,
                     help="with --collection: how many legs come from one game (correlated); 1 = all different games")
     ap.add_argument("--pregame-minutes", type=float, default=None,
@@ -304,7 +328,8 @@ def main() -> int:
     todo = load_combos(args.combos) if args.combos else auto_combos(
         client, args.collection, args.auto, args.legs, rng,
         [x.strip() for x in args.series.split(",") if x.strip()] if args.series else None, args.within_hours,
-        args.same_game, args.pregame_minutes)
+        args.same_game, args.pregame_minutes,
+        [tuple(int(x) for x in p.split(":")) for p in args.mix.split(",")] if args.mix else None)
 
     LOGS.mkdir(exist_ok=True)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")
