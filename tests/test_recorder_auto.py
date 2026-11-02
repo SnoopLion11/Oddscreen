@@ -140,3 +140,11 @@ def test_alerts_flag_cheap_quoter_and_fair_edge():
     rec_["quotes"][0] = q("a", "0.76")                          # 0.24 vs 0.25: 1c only
     rec_["row"]["yes_ev_pct"] = "2"
     assert rep.alerts(rec_) == []
+
+
+def test_group_by_game_skips_paused_markets():
+    ev = {"ticker": "KXNBAPTS-26NOV02WASORL"}
+    ms = [{"ticker": "A", "event_ticker": ev["ticker"], "status": "inactive"},
+          {"ticker": "B", "event_ticker": ev["ticker"], "status": "active"}]
+    g = rec.group_by_game([ev], ms)
+    assert [m["ticker"] for _, m in g["26NOV02WASORL"]] == ["B"]

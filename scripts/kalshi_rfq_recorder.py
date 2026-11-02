@@ -168,7 +168,8 @@ def group_by_game(events: list[dict], markets: list[dict], within_hours: float |
                   now: float | None = None, pregame_minutes: float | None = None) -> dict[str, list[tuple[dict, dict]]]:
     """Open markets of the collection's events, grouped by game.
 
-    Markets whose event is not in the collection are dropped. With
+    Markets whose event is not in the collection, or whose trading is paused
+    (status "inactive"), are dropped. With
     within_hours, only markets expected to settle within that many hours
     (expected_expiration_time; close_time is days after the game) are kept.
     With pregame_minutes, only games starting at least that far ahead.
@@ -178,8 +179,8 @@ def group_by_game(events: list[dict], markets: list[dict], within_hours: float |
     out: dict[str, list[tuple[dict, dict]]] = {}
     for m in markets:
         ev = by_event.get(m.get("event_ticker"))
-        if ev is None:
-            continue
+        if ev is None or m.get("status", "active") not in ("active", "open"):
+            continue                      # paused markets can't go in a combo
         if within_hours is not None:
             when = m.get("expected_expiration_time") or m.get("occurrence_datetime") or m.get("close_time")
             if not when or not now < _ts(when) <= now + within_hours * 3600:
