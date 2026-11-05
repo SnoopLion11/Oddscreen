@@ -230,3 +230,20 @@ def test_fair_sgp_alert_uses_leg_product():
     rec_ = {"row": {"fair": "", "naive_fair": 0.30, "yes_cost": 0.25, "no_cost": 0.78, "contracts": 10}, "quotes": []}
     a = rr.alerts(rec_, 10.0, fair_pct=5.0)
     assert [(x["kind"], x["side"]) for x in a] == [("fair_sgp", "yes")]
+
+
+def test_track_sgp_flags_tracked_quoter_near_leg_product():
+    import importlib.util as u
+    sp = u.spec_from_file_location("rfq_report", Path(__file__).resolve().parent.parent / "scripts" / "rfq_report.py")
+    rr = u.module_from_spec(sp)
+    sp.loader.exec_module(rr)
+    legs = [{"market_ticker": "KXNBAPTS-26NOV04AAABBB-X-10", "event_ticker": "KXNBAPTS-26NOV04AAABBB", "side": "yes"},
+            {"market_ticker": "KXNBATOTAL-26NOV04AAABBB-230", "event_ticker": "KXNBATOTAL-26NOV04AAABBB", "side": "no"}]
+    q = lambda creator, no_bid: {"id": creator, "creator_id": creator, "yes_bid_dollars": "0.0000",
+                                 "no_bid_dollars": f"{no_bid:.4f}"}
+    rec_ = {"legs": legs, "row": {"fair": "", "naive_fair": 0.30},
+            "quotes": [q("99516d7e-aaaa", 0.67), q("other-bbbb", 0.60)]}      # 99516d7e YES at 0.33 = 1.10x
+    kinds = [a["kind"] for a in rr.alerts(rec_)]
+    assert "track_sgp" in kinds
+    rec_["quotes"][0] = q("99516d7e-aaaa", 0.60)                              # 0.40 = 1.33x: not tracked
+    assert "track_sgp" not in [a["kind"] for a in rr.alerts(rec_)]

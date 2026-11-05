@@ -49,6 +49,10 @@ def costs(quotes: list[dict]) -> dict[str, dict[str, float]]:
     return out
 
 
+TRACK_QUOTER = "99516d7e"     # SGP pattern under test (see sgp_track.py)
+TRACK_MAX_RATIO = 1.15
+
+
 def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3,
            fair_pct: float | None = None) -> list[dict]:
     """Lines worth a look on one logged RFQ.
@@ -57,6 +61,9 @@ def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3
                    fair value after the fee (different-game combos only; same-game ones have no fair).
     kind "fair_sgp": the same, for a combo with same-game legs, against the plain
                    leg product (ignores correlation: a rough flag only).
+    kind "track_sgp": tracking only, not a bet: TRACK_QUOTER's YES price on a
+                   combo with same-game legs is at most TRACK_MAX_RATIO x the plain
+                   leg product. Settled later by scripts/sgp_track.py.
     kind "quoter": cheapest quoter is at least `pct`% and `min_c` cents below the
                    median of at least `min_others` other quoters.
     """
@@ -88,6 +95,13 @@ def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3
                             "next_best": sorted(vals.values())[1],
                             "gap_c": gap * 100, "gap_pct": gap / others * 100, "quoter": best[:8],
                             "n_quoters": len(vals)})
+    if naive not in (None, "") and float(naive) > 0 and rec.get("legs") and same_game_size(rec["legs"]) > 1:
+        mine = {c[:8]: x for c, x in cs["yes"].items()}.get(TRACK_QUOTER)
+        if mine is not None and mine <= TRACK_MAX_RATIO * float(naive):
+            out.append({"kind": "track_sgp", "side": "yes", "cost": mine, "naive_fair": float(naive),
+                        "ratio": mine / float(naive), "quoter": TRACK_QUOTER,
+                        "next_best": min((x for c, x in cs["yes"].items() if not c.startswith(TRACK_QUOTER)),
+                                         default=None)})
     return out
 
 
