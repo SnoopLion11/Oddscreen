@@ -29,8 +29,10 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import rfq_report  # noqa: E402
 
-MIX = "2:2,2:1,3:3,3:2,3:1,4:4,4:2,4:1"
-EDGE_MIX = "2:1,3:1,2:2,3:2,4:2"   # x:1 all different games; others mix a same-game pair in
+# Kept small on purpose: makers see every RFQ, and a requester who asks a lot
+# and never fills can get ignored or blocked. ~6 RFQs per 15 min by default.
+MIX = "2:2,2:1,3:2,4:2"
+EDGE_MIX = "2:1,3:2"   # x:1 all different games; x:2 mixes a same-game pair in
 
 
 def ts(s: str) -> float:
@@ -42,8 +44,8 @@ def main() -> int:
     ap.add_argument("--until", required=True, help="UTC time to stop, e.g. 2026-11-03T03:00Z")
     ap.add_argument("--every", type=float, default=15, help="minutes between batches")
     ap.add_argument("--max-minutes", type=float, default=60, help="exit after this long (a summary point)")
-    ap.add_argument("--auto", type=int, default=2, help="random combos of each MIX shape per batch")
-    ap.add_argument("--edge-auto", type=int, default=3, help="Novig-edge combos of each EDGE_MIX shape per batch")
+    ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
+    ap.add_argument("--edge-auto", type=int, default=1, help="Novig-edge combos of each EDGE_MIX shape per batch")
     ap.add_argument("--edge-gap", type=float, default=0.02, help="min |Kalshi - Novig| leg fair gap")
     ap.add_argument("--pct", type=float, default=10.0, help="quoter alert: cheapest this %% under the others")
     ap.add_argument("--fair-pct", type=float, default=5.0, help="fair alert: best price this %% under fair, after fees")
@@ -60,7 +62,7 @@ def main() -> int:
         since = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         base = [sys.executable, str(ROOT / "scripts" / "kalshi_rfq_recorder.py"),
                 "--collection", "KXMVESPORTSMULTIGAMEEXTENDED-R", "--series", "KXNBA*",
-                "--within-hours", "16", "--pregame-minutes", "10", "--wait", "10", "--gap", "3"]
+                "--within-hours", "16", "--pregame-minutes", "10", "--wait", "10", "--gap", "20"]
         runs = [("random", base + ["--mix", MIX, "--auto", str(args.auto)])]
         if args.edge_auto:
             runs.append(("novig-edge", base + ["--mix", EDGE_MIX, "--auto", str(args.edge_auto),
