@@ -1,7 +1,9 @@
 """Log-only Kalshi combo RFQ recorder.
 
 For each combo: price every leg from its own Kalshi order book (de-vigged,
-worst case), create the combo market, send an RFQ, record every quote that
+worst case; NBA player props from Novig's public two-way prices when the
+same player/stat/line is listed there, see oddscreen/novig.py), create the
+combo market, send an RFQ, record every quote that
 arrives during a short window, then DELETE the RFQ. It never accepts or
 confirms a quote and cannot place orders (oddscreen/kalshi.py refuses those
 paths in code).
@@ -41,7 +43,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from oddscreen import combos, kalshi  # noqa: E402
+from oddscreen import combos, kalshi, novig  # noqa: E402
 from oddscreen.combos import Leg, Quote  # noqa: E402
 
 LOGS = ROOT / "logs"
@@ -60,13 +62,31 @@ def _r(x, n=4):
 
 
 def price_legs(client: kalshi.Client, legs: list[Leg], min_size: float,
-               max_vig: float | None = None) -> tuple[list, list]:
+               max_vig: float | None = None, props: novig.PropBook | None = None) -> tuple[list, list]:
+    """Leg fairs and the books they came from. With `props`, a player-prop leg
+    that matches a Novig market is de-vigged on Novig's two sides instead of
+    Kalshi's own book (Kalshi YES = Novig Over); otherwise Kalshi's book."""
     fairs, books = [], []
     for leg in legs:
         ob = client.orderbook(leg.market_ticker)
         ya, ys, na, ns = kalshi.best_asks(ob)
-        books.append({"market_ticker": leg.market_ticker, "yes_ask": ya, "yes_size": ys, "no_ask": na, "no_size": ns})
-        fairs.append(combos.leg_fair(leg.side, ya, na, ys, ns, min_size, max_vig))
+        book = {"market_ticker": leg.market_ticker, "yes_ask": ya, "yes_size": ys, "no_ask": na, "no_size": ns,
+                "fair_src": "kalshi"}
+        fair = combos.leg_fair(leg.side, ya, na, ys, ns, min_size, max_vig)
+        if props is not None and leg.market_ticker.split("-")[0] in novig.KALSHI_STATS:
+            m = client.market(leg.market_ticker)
+            hit = props.lookup(leg.market_ticker, m.get("title", ""), m.get("floor_strike"), game_start(m))
+            if hit:
+                pp, nm = hit
+                nf = combos.leg_fair(leg.side, pp.over_ask, pp.under_ask, pp.over_qty, pp.under_qty, 0.0, max_vig)
+                book["novig"] = {"market_id": pp.market_id, "description": pp.description,
+                                 "over_ask": pp.over_ask, "under_ask": pp.under_ask,
+                                 "over_qty": pp.over_qty, "under_qty": pp.under_qty,
+                                 "fair": None if nf is None else nf.fair}
+                if nf is not None:
+                    fair, book["fair_src"] = nf, "novig"
+        books.append(book)
+        fairs.append(fair)
     return fairs, books
 
 
@@ -113,8 +133,9 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
                independent=combos.independent(legs))
     raw.update(ts=ts, collection=collection, legs=[l.as_api() for l in legs])
 
-    fairs, books = price_legs(client, legs, args.min_size, args.max_vig)
+    fairs, books = price_legs(client, legs, args.min_size, args.max_vig, getattr(args, "props", None))
     raw["books"] = books
+    raw["leg_fair_src"] = [b["fair_src"] for b in books]
     fair = combos.combo_fair(fairs) if row["independent"] else None
     row["leg_fairs"] = " ".join("-" if f is None else f"{f.fair:.4f}" for f in fairs)
     row["fair"] = _r(fair)
@@ -306,6 +327,8 @@ def main() -> int:
     ap.add_argument("--fee-mult", type=float, default=1.0, help="taker fee multiplier; 0 = ignore fees")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--demo", action="store_true", help="use Kalshi's demo environment")
+    ap.add_argument("--no-novig", action="store_true",
+                    help="price player props from Kalshi's own book instead of Novig's public prices")
     args = ap.parse_args()
 
     env = kalshi.load_env(ROOT)
@@ -319,6 +342,11 @@ def main() -> int:
     base = kalshi.DEMO_BASE if args.demo else env.get("KALSHI_API_URL", kalshi.DEFAULT_BASE)
     client = kalshi.Client(signer, base)
     print(f"Kalshi {base}  (log-only: quotes are never accepted)")
+    args.props = None if args.no_novig else novig.PropBook(league=env.get("NOVIG_LEAGUE", "NBA"))
+    if args.props is not None:
+        n = len(args.props.markets())
+        print(f"Novig public prices: {n} NBA markets" if not args.props.error
+              else f"Novig unreachable ({args.props.error}); props use Kalshi's book")
 
     if args.list_collections:
         for c in client.collections(status="open"):

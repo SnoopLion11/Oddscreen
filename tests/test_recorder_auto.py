@@ -148,3 +148,34 @@ def test_group_by_game_skips_paused_markets():
           {"ticker": "B", "event_ticker": ev["ticker"], "status": "active"}]
     g = rec.group_by_game([ev], ms)
     assert [m["ticker"] for _, m in g["26NOV02WASORL"]] == ["B"]
+
+
+class _FakeKalshi:
+    def orderbook(self, t):
+        return {"orderbook_fp": {"yes_dollars": [["0.40", "10"]], "no_dollars": [["0.55", "10"]]}}
+
+    def market(self, t):
+        return {"title": "Isaiah Jackson: 20+ points", "floor_strike": 19.5,
+                "close_time": "2026-11-07T00:00:00Z"}
+
+
+def test_price_legs_uses_novig_for_props():
+    from oddscreen import novig
+    start = rec._ts("2026-11-05T00:00:00Z")
+    nm = {"marketId": "n1", "description": "Isaiah Jackson Points", "marketType": "PLAYER_POINTS",
+          "strike": "19.5", "status": "OPEN", "startsTs": int(start * 1000),
+          "outcomes": [{"name": "Over", "bid": {"price": "0.30", "qty": 5}},
+                       {"name": "Under", "bid": {"price": "0.66", "qty": 5}}]}
+
+    class FakeNovig:
+        def markets(self, league):
+            return [nm]
+
+    prop = combos.Leg("KXNBAPTS-26NOV04MIALAC-LACIJACKSON23-20", "KXNBAPTS-26NOV04MIALAC", "yes")
+    other = combos.Leg("KXNBASPREAD-26NOV04TORDEN-DEN5", "KXNBASPREAD-26NOV04TORDEN", "yes")
+    fairs, books = rec.price_legs(_FakeKalshi(), [prop, other], 0.0, 0.06, novig.PropBook(FakeNovig()))
+    assert [b["fair_src"] for b in books] == ["novig", "kalshi"]
+    assert books[0]["novig"]["over_ask"] == 1 - 0.66
+    assert 0.30 < fairs[0].fair < 0.34          # from Novig's 0.34 / 0.70, not Kalshi's 0.45 / 0.60
+    kalshi_only, _ = rec.price_legs(_FakeKalshi(), [prop], 0.0, 0.06, None)
+    assert kalshi_only[0].fair > 0.40
