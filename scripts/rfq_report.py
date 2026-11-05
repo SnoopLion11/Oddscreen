@@ -49,11 +49,12 @@ def costs(quotes: list[dict]) -> dict[str, dict[str, float]]:
     return out
 
 
-def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3) -> list[dict]:
+def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3,
+           fair_pct: float | None = None) -> list[dict]:
     """Lines worth a look on one logged RFQ.
 
-    kind "fair":   best price is at least `pct`% better than fair value after the
-                   fee (different-game combos only; same-game ones have no fair).
+    kind "fair":   best price is at least `fair_pct`% (default `pct`) better than
+                   fair value after the fee (different-game combos only; same-game ones have no fair).
     kind "quoter": cheapest quoter is at least `pct`% and `min_c` cents below the
                    median of at least `min_others` other quoters.
     """
@@ -61,7 +62,7 @@ def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3
     cs = costs(rec.get("quotes") or [])
     for side in ("yes", "no"):
         ev = row.get(f"{side}_ev_pct")
-        if ev not in (None, "") and float(ev) >= pct:
+        if ev not in (None, "") and float(ev) >= (pct if fair_pct is None else fair_pct):
             out.append({"kind": "fair", "side": side, "cost": float(row[f"{side}_cost"]), "ev_pct": float(ev),
                         "quoter": (row.get(f"{side}_creator") or "")[:8]})
         vals = cs[side]

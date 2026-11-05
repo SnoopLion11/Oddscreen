@@ -219,7 +219,8 @@ def sample_legs(by_game: dict[str, list[tuple[dict, dict]]], n_legs: int, same_g
     """n_legs legs: `same_game` of them from one game (each from a different
     event, e.g. moneyline + total), the rest from other games, one each."""
     def leg(ev, m):
-        return Leg(m["ticker"], ev["ticker"], "yes" if ev.get("is_yes_only") else rng.choice(["yes", "no"]))
+        side = m.get("_side") or ("yes" if ev.get("is_yes_only") else rng.choice(["yes", "no"]))
+        return Leg(m["ticker"], ev["ticker"], side)
 
     legs, games = [], list(by_game)
     if same_game > 1:
@@ -231,6 +232,35 @@ def sample_legs(by_game: dict[str, list[tuple[dict, dict]]], n_legs: int, same_g
     for g in rng.sample(games, n_legs - len(legs)):
         legs.append(leg(*rng.choice(by_game[g])))
     return legs
+
+
+def kalshi_listed_fair(m: dict, max_vig: float | None) -> combos.LegFair | None:
+    """YES fair of a Kalshi market from the asks in its market listing (no orderbook call)."""
+    ya, na = kalshi.dollars(m, "yes_ask_dollars"), kalshi.dollars(m, "no_ask_dollars")
+    return combos.leg_fair("yes", ya, na, max_vig=max_vig)
+
+
+def novig_edge_legs(by_game: dict[str, list[tuple[dict, dict]]], props: novig.PropBook, min_gap: float,
+                    max_vig: float | None) -> dict[str, list[tuple[dict, dict]]]:
+    """Only the player-prop markets whose Kalshi price is at least min_gap away
+    from Novig's de-vigged fair, each with its side preset to the one Kalshi
+    underprices (Novig fair > Kalshi fair): if quoters price from Kalshi's
+    legs, a combo of such legs inherits the gap."""
+    out: dict[str, list[tuple[dict, dict]]] = {}
+    for g, lst in by_game.items():
+        for ev, m in lst:
+            if m["ticker"].split("-")[0] not in novig.KALSHI_STATS:
+                continue
+            kf = kalshi_listed_fair(m, max_vig)
+            hit = props.lookup(m["ticker"], m.get("title", ""), m.get("floor_strike"), game_start(m))
+            if kf is None or not hit:
+                continue
+            nf = combos.leg_fair("yes", hit[0].over_ask, hit[0].under_ask, max_vig=max_vig)
+            if nf is None or abs(nf.fair - kf.fair) < min_gap:
+                continue
+            out.setdefault(g, []).append((ev, {**m, "_side": "yes" if nf.fair > kf.fair else "no",
+                                               "_gap": nf.fair - kf.fair}))
+    return out
 
 
 def expand_series(series: list[str], events: list[dict]) -> list[str]:
@@ -246,8 +276,11 @@ def expand_series(series: list[str], events: list[dict]) -> list[str]:
 
 def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: int, rng: random.Random,
                 series: list[str] | None = None, within_hours: float | None = None, same_game: int = 1,
-                pregame_minutes: float | None = None, mix: list[tuple[int, int]] | None = None):
-    """n combos for each (legs, same_game) in mix (default: just n_legs, same_game)."""
+                pregame_minutes: float | None = None, mix: list[tuple[int, int]] | None = None,
+                props: novig.PropBook | None = None, novig_edge: float | None = None,
+                max_vig: float | None = None):
+    """n combos for each (legs, same_game) in mix (default: just n_legs, same_game).
+    With novig_edge (and props), legs come only from novig_edge_legs()."""
     mix = mix or [(n_legs, same_game)]
     col = client.collection(collection_ticker)
     lo = col.get("size_min") or 2
@@ -265,6 +298,12 @@ def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: i
     else:
         markets = [m for ev in events for m in client.markets(event_ticker=ev["ticker"], status="open")]
     by_game = group_by_game(events, markets, within_hours, pregame_minutes=pregame_minutes)
+    if novig_edge is not None:
+        if props is None or props.error:
+            raise SystemExit("--novig-edge needs Novig prices: " + (props.error if props else "disabled"))
+        by_game = novig_edge_legs(by_game, props, novig_edge, max_vig)
+        print(f"Novig edge >= {novig_edge:.2f}: " + ", ".join(
+            f"{m['ticker']}:{m['_side']} {m['_gap']:+.3f}" for lst in by_game.values() for _, m in lst))
     games = list(by_game)
     print(f"{collection_ticker}: {len(games)} games, {sum(map(len, by_game.values()))} open leg markets")
     out = []
@@ -327,6 +366,9 @@ def main() -> int:
     ap.add_argument("--fee-mult", type=float, default=1.0, help="taker fee multiplier; 0 = ignore fees")
     ap.add_argument("--seed", type=int, default=None)
     ap.add_argument("--demo", action="store_true", help="use Kalshi's demo environment")
+    ap.add_argument("--novig-edge", type=float, default=None,
+                    help="with --collection: only player-prop legs whose Kalshi price is at least this far "
+                    "(e.g. 0.02) from Novig's fair, on the side Kalshi underprices")
     ap.add_argument("--no-novig", action="store_true",
                     help="price player props from Kalshi's own book instead of Novig's public prices")
     args = ap.parse_args()
@@ -358,7 +400,8 @@ def main() -> int:
         client, args.collection, args.auto, args.legs, rng,
         [x.strip() for x in args.series.split(",") if x.strip()] if args.series else None, args.within_hours,
         args.same_game, args.pregame_minutes,
-        [tuple(int(x) for x in p.split(":")) for p in args.mix.split(",")] if args.mix else None)
+        [tuple(int(x) for x in p.split(":")) for p in args.mix.split(",")] if args.mix else None,
+        args.props, args.novig_edge, args.max_vig)
 
     LOGS.mkdir(exist_ok=True)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")

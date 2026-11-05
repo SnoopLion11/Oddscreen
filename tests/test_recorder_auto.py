@@ -179,3 +179,44 @@ def test_price_legs_uses_novig_for_props():
     assert 0.30 < fairs[0].fair < 0.34          # from Novig's 0.34 / 0.70, not Kalshi's 0.45 / 0.60
     kalshi_only, _ = rec.price_legs(_FakeKalshi(), [prop], 0.0, 0.06, None)
     assert kalshi_only[0].fair > 0.40
+
+
+def test_novig_edge_legs_keeps_gaps_with_side():
+    from oddscreen import novig
+    start = rec._ts("2026-11-05T00:00:00Z")
+
+    def nv(desc, strike, over_bid, under_bid):
+        return {"marketId": desc, "description": desc, "marketType": "POINTS", "strike": str(strike),
+                "status": "OPEN", "startsTs": int(start * 1000),
+                "outcomes": [{"name": f"Over {strike}", "bid": {"price": str(over_bid), "qty": 5}},
+                             {"name": f"Under {strike}", "bid": {"price": str(under_bid), "qty": 5}}]}
+
+    class FakeNovig:
+        def markets(self, league):
+            return [nv("Ann Lee 19.5 POINTS", 19.5, 0.58, 0.40),     # Novig ~0.59 vs Kalshi ~0.50
+                    nv("Bo Ray 9.5 POINTS", 9.5, 0.48, 0.50)]        # Novig ~0.49 vs Kalshi ~0.50
+
+    def km(ticker, title, strike, ya, na):
+        return {"ticker": ticker, "title": title, "floor_strike": strike, "close_time": "2026-11-07T00:00:00Z",
+                "yes_ask_dollars": str(ya), "no_ask_dollars": str(na)}
+
+    ev = {"ticker": "KXNBAPTS-26NOV04AAABBB"}
+    by_game = {"26NOV04AAABBB": [(ev, km("KXNBAPTS-26NOV04AAABBB-AALEE1-20", "Ann Lee: 20+ points", 19.5, 0.52, 0.50)),
+                                 (ev, km("KXNBAPTS-26NOV04AAABBB-BBRAY2-10", "Bo Ray: 10+ points", 9.5, 0.52, 0.50)),
+                                 (ev, km("KXNBASPREAD-26NOV04AAABBB-AAA5", "AAA wins by 5+", 4.5, 0.5, 0.52))]}
+    out = rec.novig_edge_legs(by_game, novig.PropBook(FakeNovig()), 0.02, 0.06)
+    kept = [m for _, m in out["26NOV04AAABBB"]]
+    assert [m["ticker"] for m in kept] == ["KXNBAPTS-26NOV04AAABBB-AALEE1-20"]
+    assert kept[0]["_side"] == "yes" and kept[0]["_gap"] > 0.05
+    leg = rec.sample_legs({"g": [(ev, kept[0])]}, 1, 1, __import__("random").Random(0))[0]
+    assert leg.side == "yes"
+
+
+def test_fair_alert_threshold_separate_from_quoter_pct():
+    import importlib.util as u
+    sp = u.spec_from_file_location("rfq_report", Path(__file__).resolve().parent.parent / "scripts" / "rfq_report.py")
+    rr = u.module_from_spec(sp)
+    sp.loader.exec_module(rr)
+    rec_ = {"row": {"yes_ev_pct": 6.0, "yes_cost": 0.2, "yes_creator": "abc"}, "quotes": []}
+    assert rr.alerts(rec_, 10.0) == []
+    assert [a["kind"] for a in rr.alerts(rec_, 10.0, fair_pct=5.0)] == ["fair"]
