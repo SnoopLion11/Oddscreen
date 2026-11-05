@@ -217,9 +217,13 @@ def test_fair_alert_threshold_separate_from_quoter_pct():
     sp = u.spec_from_file_location("rfq_report", Path(__file__).resolve().parent.parent / "scripts" / "rfq_report.py")
     rr = u.module_from_spec(sp)
     sp.loader.exec_module(rr)
-    rec_ = {"row": {"yes_ev_pct": 6.0, "yes_cost": 0.2, "yes_creator": "abc"}, "quotes": []}
+    rec_ = {"row": {"fair": 0.2141, "yes_ev_pct": 6.0, "yes_cost": 0.2, "yes_fee": 0.002, "yes_creator": "abc"},
+            "quotes": []}
     assert rr.alerts(rec_, 10.0) == []
     assert [a["kind"] for a in rr.alerts(rec_, 10.0, fair_pct=5.0)] == ["fair"]
+    assert rr.alerts(rec_, 10.0, fair_pct=5.0, fair_min_c=2.0) == []        # 6% but only ~1.2c
+    rec_["row"].update(fair=0.70, yes_cost=0.64, yes_fee=0.0, yes_ev_pct=9.4)
+    assert [a["kind"] for a in rr.alerts(rec_, 10.0, fair_pct=5.0, fair_min_c=2.0)] == ["fair"]   # 6c
 
 
 def test_fair_sgp_alert_uses_leg_product():
@@ -230,6 +234,7 @@ def test_fair_sgp_alert_uses_leg_product():
     rec_ = {"row": {"fair": "", "naive_fair": 0.30, "yes_cost": 0.25, "no_cost": 0.78, "contracts": 10}, "quotes": []}
     a = rr.alerts(rec_, 10.0, fair_pct=5.0)
     assert [(x["kind"], x["side"]) for x in a] == [("fair_sgp", "yes")]
+    assert rr.alerts(rec_, 10.0, fair_pct=5.0, fair_min_c=5.0) == []       # 30c fair vs ~25.1c: under 5c
 
 
 def test_track_sgp_flags_tracked_quoter_near_leg_product():

@@ -10,7 +10,7 @@ Player-prop legs are de-vigged on Novig's prices when listed there.
   python scripts/nba_watch.py --until 2026-11-03T03:00Z --max-minutes 60
 
 Exits with status 3 as soon as a "fair" alert appears (best price --fair-pct
-or more better than fair value after fees), otherwise after --max-minutes or
+or more AND --fair-min-c cents or more better than fair value after fees), otherwise after --max-minutes or
 at --until. Alerts are appended to logs/alerts_<date>.jsonl. Quotes are never
 accepted.
 """
@@ -47,6 +47,7 @@ def main() -> int:
     ap.add_argument("--edge-gap", type=float, default=0.02, help="min |Kalshi - Novig| leg fair gap")
     ap.add_argument("--pct", type=float, default=10.0, help="quoter alert: cheapest this %% under the others")
     ap.add_argument("--fair-pct", type=float, default=5.0, help="fair alert: best price this %% under fair, after fees")
+    ap.add_argument("--fair-min-c", type=float, default=2.0, help="fair alert: and at least this many cents under fair")
     ap.add_argument("--min-c", type=float, default=2.0)
     args = ap.parse_args()
 
@@ -82,7 +83,7 @@ def main() -> int:
             for line in f.open():
                 rec = json.loads(line)
                 if rec.get("ts", "") >= since:
-                    for a in rfq_report.alerts(rec, args.pct, args.min_c, fair_pct=args.fair_pct):
+                    for a in rfq_report.alerts(rec, args.pct, args.min_c, fair_pct=args.fair_pct, fair_min_c=args.fair_min_c):
                         new.append({**a, "ts": rec["ts"], "legs": (rec.get("row") or {}).get("legs", ""),
                                     "group": rfq_report.group_label(rec["legs"])})
         with (logs / f"alerts_{datetime.now(timezone.utc):%Y%m%d}.jsonl").open("a") as af:

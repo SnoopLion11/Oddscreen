@@ -54,11 +54,11 @@ TRACK_MAX_RATIO = 1.15
 
 
 def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3,
-           fair_pct: float | None = None) -> list[dict]:
+           fair_pct: float | None = None, fair_min_c: float = 0.0) -> list[dict]:
     """Lines worth a look on one logged RFQ.
 
-    kind "fair":   best price is at least `fair_pct`% (default `pct`) better than
-                   fair value after the fee (different-game combos only; same-game ones have no fair).
+    kind "fair":   best price is at least `fair_pct`% (default `pct`) AND
+                   `fair_min_c` cents better than fair value after the fee (different-game combos only; same-game ones have no fair).
     kind "fair_sgp": the same, for a combo with same-game legs, against the plain
                    leg product (ignores correlation: a rough flag only).
     kind "track_sgp": tracking only, not a bet: TRACK_QUOTER's YES price on a
@@ -74,16 +74,20 @@ def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3
     for side in ("yes", "no"):
         ev = row.get(f"{side}_ev_pct")
         if ev not in (None, "") and float(ev) >= fp:
-            out.append({"kind": "fair", "side": side, "cost": float(row[f"{side}_cost"]), "ev_pct": float(ev),
-                        "quoter": (row.get(f"{side}_creator") or "")[:8]})
+            cost, fee = float(row[f"{side}_cost"]), float(row.get(f"{side}_fee") or 0)
+            edge_c = float(ev) / 100.0 * (cost + fee) * 100.0     # fair - (cost + fee), from the EV
+            if edge_c >= fair_min_c:
+                out.append({"kind": "fair", "side": side, "cost": cost, "ev_pct": float(ev), "edge_c": edge_c,
+                            "quoter": (row.get(f"{side}_creator") or "")[:8]})
         elif row.get("fair") in (None, "") and naive not in (None, "") and row.get(f"{side}_cost") not in (None, ""):
             # Same-game legs: the leg product ignores correlation, so this is a rough flag only.
             cost = float(row[f"{side}_cost"])
             f = float(naive) if side == "yes" else 1.0 - float(naive)
             fee = combos.taker_fee_per_contract(cost, float(row.get("contracts") or 10))
             ev = (f / (cost + fee) - 1.0) * 100.0
-            if ev >= fp:
-                out.append({"kind": "fair_sgp", "side": side, "cost": cost, "ev_pct": ev,
+            edge_c = (f - cost - fee) * 100.0
+            if ev >= fp and edge_c >= fair_min_c:
+                out.append({"kind": "fair_sgp", "side": side, "cost": cost, "ev_pct": ev, "edge_c": edge_c,
                             "quoter": (row.get(f"{side}_creator") or "")[:8]})
         vals = cs[side]
         if len(vals) >= min_others + 1:
