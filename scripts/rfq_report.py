@@ -55,16 +55,29 @@ def alerts(rec: dict, pct: float = 10.0, min_c: float = 2.0, min_others: int = 3
 
     kind "fair":   best price is at least `fair_pct`% (default `pct`) better than
                    fair value after the fee (different-game combos only; same-game ones have no fair).
+    kind "fair_sgp": the same, for a combo with same-game legs, against the plain
+                   leg product (ignores correlation: a rough flag only).
     kind "quoter": cheapest quoter is at least `pct`% and `min_c` cents below the
                    median of at least `min_others` other quoters.
     """
     out, row = [], rec.get("row") or {}
     cs = costs(rec.get("quotes") or [])
+    fp = pct if fair_pct is None else fair_pct
+    naive = row.get("naive_fair")
     for side in ("yes", "no"):
         ev = row.get(f"{side}_ev_pct")
-        if ev not in (None, "") and float(ev) >= (pct if fair_pct is None else fair_pct):
+        if ev not in (None, "") and float(ev) >= fp:
             out.append({"kind": "fair", "side": side, "cost": float(row[f"{side}_cost"]), "ev_pct": float(ev),
                         "quoter": (row.get(f"{side}_creator") or "")[:8]})
+        elif row.get("fair") in (None, "") and naive not in (None, "") and row.get(f"{side}_cost") not in (None, ""):
+            # Same-game legs: the leg product ignores correlation, so this is a rough flag only.
+            cost = float(row[f"{side}_cost"])
+            f = float(naive) if side == "yes" else 1.0 - float(naive)
+            fee = combos.taker_fee_per_contract(cost, float(row.get("contracts") or 10))
+            ev = (f / (cost + fee) - 1.0) * 100.0
+            if ev >= fp:
+                out.append({"kind": "fair_sgp", "side": side, "cost": cost, "ev_pct": ev,
+                            "quoter": (row.get(f"{side}_creator") or "")[:8]})
         vals = cs[side]
         if len(vals) >= min_others + 1:
             best = min(vals, key=vals.get)

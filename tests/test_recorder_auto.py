@@ -220,3 +220,13 @@ def test_fair_alert_threshold_separate_from_quoter_pct():
     rec_ = {"row": {"yes_ev_pct": 6.0, "yes_cost": 0.2, "yes_creator": "abc"}, "quotes": []}
     assert rr.alerts(rec_, 10.0) == []
     assert [a["kind"] for a in rr.alerts(rec_, 10.0, fair_pct=5.0)] == ["fair"]
+
+
+def test_fair_sgp_alert_uses_leg_product():
+    import importlib.util as u
+    sp = u.spec_from_file_location("rfq_report", Path(__file__).resolve().parent.parent / "scripts" / "rfq_report.py")
+    rr = u.module_from_spec(sp)
+    sp.loader.exec_module(rr)
+    rec_ = {"row": {"fair": "", "naive_fair": 0.30, "yes_cost": 0.25, "no_cost": 0.78, "contracts": 10}, "quotes": []}
+    a = rr.alerts(rec_, 10.0, fair_pct=5.0)
+    assert [(x["kind"], x["side"]) for x in a] == [("fair_sgp", "yes")]
