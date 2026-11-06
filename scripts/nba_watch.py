@@ -1,7 +1,12 @@
-"""Watch today's NBA combos: send log-only RFQs at a steady, slow pace
-(--per-minute, default 1.5 = one RFQ every 40 s, never a burst) and print
-any line worth a look (see rfq_report.alerts). Batches run back to back
-(or every --every minutes if set); each batch has
+"""Watch today's NBA combos: send log-only RFQs slowly and irregularly, and
+print any line worth a look (see rfq_report.alerts). Pacing, so makers see
+neither bursts nor a constant stream:
+  - one RFQ at a time, random gaps averaging --per-minute (default 1/min,
+    gaps roughly 40-80 s apart start to start; hard cap 2/min),
+  - work/rest: about --on-minutes of requests, then a --off-minutes pause
+    (both randomised +-30%),
+  - --night-cap: stop once this many RFQs are logged since --night-start.
+Each batch has
   - random combos (2-4 legs, same game and different games, every prop type),
     --auto of each shape in MIX, and
   - "Novig edge" combos: different-game 2-3 leggers built only from player
@@ -20,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import subprocess
 import sys
 import time
@@ -46,7 +52,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--until", required=True, help="UTC time to stop, e.g. 2026-11-03T03:00Z")
     ap.add_argument("--every", type=float, default=0, help="minutes between batch starts (0 = back to back)")
-    ap.add_argument("--per-minute", type=float, default=1.5, help="RFQs per minute, evenly spaced (max 2)")
+    ap.add_argument("--per-minute", type=float, default=1.0, help="average RFQs per minute while active (max 2)")
+    ap.add_argument("--on-minutes", type=float, default=20, help="active stretch before a pause")
+    ap.add_argument("--off-minutes", type=float, default=10, help="pause length")
+    ap.add_argument("--night-cap", type=int, default=250, help="max RFQs logged since --night-start")
+    ap.add_argument("--night-start", default=None, help="UTC start of the night for --night-cap (default: 12 h before --until)")
     ap.add_argument("--wait", type=float, default=10, help="seconds to collect quotes per RFQ")
     ap.add_argument("--max-minutes", type=float, default=60, help="exit after this long (a summary point)")
     ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
@@ -59,27 +69,54 @@ def main() -> int:
     args = ap.parse_args()
     if not 0 < args.per_minute <= 2:
         ap.error("--per-minute must be above 0 and at most 2")
-    spacing = 60.0 / args.per_minute                 # seconds from one RFQ start to the next
-    gap = max(5.0, spacing - args.wait - 2.0)        # ~2 s per RFQ for create/delete calls
+    rng = random.Random()
+    spacing = 60.0 / args.per_minute                 # average seconds from one RFQ start to the next
+    mean_gap = max(5.0, spacing - args.wait - 2.0)   # ~2 s per RFQ for create/delete calls
+    gap_lo, gap_hi = max(20.0, mean_gap * 0.6), mean_gap * 1.4
+    gap_lo = min(gap_lo, gap_hi)
+    night_start = (args.night_start and ts(args.night_start)) or ts(args.until) - 12 * 3600
+
+    def logged_tonight() -> int:
+        since_iso = datetime.fromtimestamp(night_start, timezone.utc).isoformat()
+        n = 0
+        for f in (ROOT / "logs").glob("combo_rfqs_*.jsonl"):
+            n += sum(1 for line in f.open() if json.loads(line).get("ts", "") >= since_iso)
+        return n
+
+    def pause_for() -> float:
+        return rng.uniform(gap_lo, gap_hi)
 
     start, until = time.time(), ts(args.until)
     logs = ROOT / "logs"
     found = []
     end = min(until, start + args.max_minutes * 60)
+    active_until = time.time() + args.on_minutes * 60 * rng.uniform(0.7, 1.3)
     while time.time() < end:
+        done_tonight = logged_tonight()
+        if done_tonight >= args.night_cap:
+            print(f"night cap reached ({done_tonight} requests); stopping", flush=True)
+            break
+        if time.time() >= active_until:
+            rest = args.off_minutes * 60 * rng.uniform(0.7, 1.3)
+            print(f"pausing {rest / 60:.0f} min", flush=True)
+            time.sleep(max(0.0, min(rest, end - time.time())))
+            active_until = time.time() + args.on_minutes * 60 * rng.uniform(0.7, 1.3)
+            continue
         t0 = time.time()
         since = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         base = [sys.executable, str(ROOT / "scripts" / "kalshi_rfq_recorder.py"),
                 "--collection", "KXMVESPORTSMULTIGAMEEXTENDED-R", "--series", "KXNBA*",
-                "--within-hours", "16", "--pregame-minutes", "10", "--wait", str(args.wait), "--gap", f"{gap:.0f}", "--poll", "1"]
+                "--within-hours", "16", "--pregame-minutes", "10", "--wait", str(args.wait), "--gap", f"{gap_lo:.0f}", "--gap-max", f"{gap_hi:.0f}",
+                "--poll", "1"]
         runs = [("random", base + ["--mix", MIX, "--auto", str(args.auto)])]
+        # (a batch can overshoot the cap by its own size, at most ~6)
         if args.edge_auto:
             runs.append(("novig-edge", base + ["--mix", EDGE_MIX, "--auto", str(args.edge_auto),
                                                "--novig-edge", str(args.edge_gap)]))
         n, stop = 0, False
         for k, (name, cmd) in enumerate(runs):
             if k:
-                time.sleep(gap)   # keep the spacing between the two runs too
+                time.sleep(pause_for())   # same random spacing between the two runs
             r = subprocess.run(cmd, capture_output=True, text=True)
             n += sum(1 for l in r.stdout.splitlines() if l.startswith("["))
             if r.returncode:
@@ -108,7 +145,7 @@ def main() -> int:
             print("  ALERT " + json.dumps(a), flush=True)
         if any(a["kind"] == "fair" for a in new):
             return 3
-        pause = max(gap, args.every * 60 - (time.time() - t0))
+        pause = max(pause_for(), args.every * 60 - (time.time() - t0))
         time.sleep(max(0.0, min(pause, end - time.time())))
     print(f"done: {len(found)} alerts", flush=True)
     return 0

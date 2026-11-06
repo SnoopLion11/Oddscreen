@@ -360,6 +360,8 @@ def main() -> int:
     ap.add_argument("--wait", type=float, default=8.0, help="seconds to collect quotes per RFQ")
     ap.add_argument("--poll", type=float, default=0.5, help="seconds between quote polls")
     ap.add_argument("--gap", type=float, default=15.0, help="seconds between RFQs")
+    ap.add_argument("--gap-max", type=float, default=None,
+                    help="if set, each gap is random between --gap and this (no fixed rhythm)")
     ap.add_argument("--min-size", type=float, default=0.0, help="min contracts at a leg's best ask to price it")
     ap.add_argument("--max-vig", type=float, default=0.06,
                     help="don't price a leg whose YES ask + NO ask exceeds 1 by more than this")
@@ -413,7 +415,7 @@ def main() -> int:
             w.writeheader()
         for i, (collection, legs) in enumerate(todo, 1):
             if i > 1:
-                time.sleep(args.gap)
+                time.sleep(rng.uniform(args.gap, max(args.gap, args.gap_max)) if args.gap_max else args.gap)
             row, raw = record_one(client, collection, legs, args)
             raw["row"] = row          # the CSV row too, so the .jsonl alone is a complete log
             w.writerow(row)
