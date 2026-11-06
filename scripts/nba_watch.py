@@ -59,6 +59,8 @@ def main() -> int:
     ap.add_argument("--night-start", default=None, help="UTC start of the night for --night-cap (default: 12 h before --until)")
     ap.add_argument("--wait", type=float, default=10, help="seconds to collect quotes per RFQ")
     ap.add_argument("--max-minutes", type=float, default=60, help="exit after this long (a summary point)")
+    ap.add_argument("--mix", default=MIX, help="random combo shapes legs:same_game (x:1 = all different games)")
+    ap.add_argument("--edge-mix", default=EDGE_MIX, help="Novig-edge combo shapes")
     ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
     ap.add_argument("--edge-auto", type=int, default=1, help="Novig-edge combos of each EDGE_MIX shape per batch")
     ap.add_argument("--edge-gap", type=float, default=0.02, help="min |Kalshi - Novig| leg fair gap")
@@ -108,10 +110,10 @@ def main() -> int:
                 "--collection", "KXMVESPORTSMULTIGAMEEXTENDED-R", "--series", "KXNBA*",
                 "--within-hours", "16", "--pregame-minutes", "10", "--wait", str(args.wait), "--gap", f"{gap_lo:.0f}", "--gap-max", f"{gap_hi:.0f}",
                 "--poll", "1"]
-        runs = [("random", base + ["--mix", MIX, "--auto", str(args.auto)])]
+        runs = [("random", base + ["--mix", args.mix, "--auto", str(args.auto)])]
         # (a batch can overshoot the cap by its own size, at most ~6)
         if args.edge_auto:
-            runs.append(("novig-edge", base + ["--mix", EDGE_MIX, "--auto", str(args.edge_auto),
+            runs.append(("novig-edge", base + ["--mix", args.edge_mix, "--auto", str(args.edge_auto),
                                                "--novig-edge", str(args.edge_gap)]))
         n, stop = 0, False
         for k, (name, cmd) in enumerate(runs):
