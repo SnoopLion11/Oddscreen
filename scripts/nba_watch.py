@@ -1,5 +1,7 @@
-"""Watch today's NBA combos: every 15 minutes, send a batch of log-only RFQs
-and print any line worth a look (see rfq_report.alerts). Each batch has
+"""Watch today's NBA combos: send log-only RFQs at a steady, slow pace
+(--per-minute, default 1.5 = one RFQ every 40 s, never a burst) and print
+any line worth a look (see rfq_report.alerts). Batches run back to back
+(or every --every minutes if set); each batch has
   - random combos (2-4 legs, same game and different games, every prop type),
     --auto of each shape in MIX, and
   - "Novig edge" combos: different-game 2-3 leggers built only from player
@@ -29,8 +31,9 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import rfq_report  # noqa: E402
 
-# Kept small on purpose: makers see every RFQ, and a requester who asks a lot
-# and never fills can get ignored or blocked. ~6 RFQs per 15 min by default.
+# Paced on purpose: makers see every RFQ, and a requester who fires many at
+# once can get ignored or blocked. RFQs go out one at a time, --per-minute
+# apart (start to start), including across batches.
 MIX = "2:2,2:1,3:2,4:2"
 EDGE_MIX = "2:1,3:2"   # x:1 all different games; x:2 mixes a same-game pair in
 
@@ -42,7 +45,9 @@ def ts(s: str) -> float:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--until", required=True, help="UTC time to stop, e.g. 2026-11-03T03:00Z")
-    ap.add_argument("--every", type=float, default=15, help="minutes between batches")
+    ap.add_argument("--every", type=float, default=0, help="minutes between batch starts (0 = back to back)")
+    ap.add_argument("--per-minute", type=float, default=1.5, help="RFQs per minute, evenly spaced (max 2)")
+    ap.add_argument("--wait", type=float, default=10, help="seconds to collect quotes per RFQ")
     ap.add_argument("--max-minutes", type=float, default=60, help="exit after this long (a summary point)")
     ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
     ap.add_argument("--edge-auto", type=int, default=1, help="Novig-edge combos of each EDGE_MIX shape per batch")
@@ -52,6 +57,10 @@ def main() -> int:
     ap.add_argument("--fair-min-c", type=float, default=2.0, help="fair alert: and at least this many cents under fair")
     ap.add_argument("--min-c", type=float, default=2.0)
     args = ap.parse_args()
+    if not 0 < args.per_minute <= 2:
+        ap.error("--per-minute must be above 0 and at most 2")
+    spacing = 60.0 / args.per_minute                 # seconds from one RFQ start to the next
+    gap = max(5.0, spacing - args.wait - 2.0)        # ~2 s per RFQ for create/delete calls
 
     start, until = time.time(), ts(args.until)
     logs = ROOT / "logs"
@@ -62,13 +71,15 @@ def main() -> int:
         since = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         base = [sys.executable, str(ROOT / "scripts" / "kalshi_rfq_recorder.py"),
                 "--collection", "KXMVESPORTSMULTIGAMEEXTENDED-R", "--series", "KXNBA*",
-                "--within-hours", "16", "--pregame-minutes", "10", "--wait", "10", "--gap", "20"]
+                "--within-hours", "16", "--pregame-minutes", "10", "--wait", str(args.wait), "--gap", f"{gap:.0f}", "--poll", "1"]
         runs = [("random", base + ["--mix", MIX, "--auto", str(args.auto)])]
         if args.edge_auto:
             runs.append(("novig-edge", base + ["--mix", EDGE_MIX, "--auto", str(args.edge_auto),
                                                "--novig-edge", str(args.edge_gap)]))
         n, stop = 0, False
-        for name, cmd in runs:
+        for k, (name, cmd) in enumerate(runs):
+            if k:
+                time.sleep(gap)   # keep the spacing between the two runs too
             r = subprocess.run(cmd, capture_output=True, text=True)
             n += sum(1 for l in r.stdout.splitlines() if l.startswith("["))
             if r.returncode:
@@ -97,7 +108,8 @@ def main() -> int:
             print("  ALERT " + json.dumps(a), flush=True)
         if any(a["kind"] == "fair" for a in new):
             return 3
-        time.sleep(max(0.0, min(args.every * 60 - (time.time() - t0), end - time.time())))
+        pause = max(gap, args.every * 60 - (time.time() - t0))
+        time.sleep(max(0.0, min(pause, end - time.time())))
     print(f"done: {len(found)} alerts", flush=True)
     return 0
 
