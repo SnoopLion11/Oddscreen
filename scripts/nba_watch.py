@@ -54,7 +54,7 @@ def main() -> int:
     ap.add_argument("--every", type=float, default=0, help="minutes between batch starts (0 = back to back)")
     ap.add_argument("--per-minute", type=float, default=1.0, help="average RFQs per minute while active (max 2)")
     ap.add_argument("--on-minutes", type=float, default=20, help="active stretch before a pause")
-    ap.add_argument("--off-minutes", type=float, default=10, help="pause length")
+    ap.add_argument("--off-minutes", type=float, default=15, help="pause length")
     ap.add_argument("--night-cap", type=int, default=250, help="max RFQs logged since --night-start")
     ap.add_argument("--night-start", default=None, help="UTC start of the night for --night-cap (default: 12 h before --until)")
     ap.add_argument("--wait", type=float, default=10, help="seconds to collect quotes per RFQ")
