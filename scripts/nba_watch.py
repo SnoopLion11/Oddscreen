@@ -61,6 +61,9 @@ def main() -> int:
     ap.add_argument("--max-minutes", type=float, default=60, help="exit after this long (a summary point)")
     ap.add_argument("--mix", default=MIX, help="random combo shapes legs:same_game (x:1 = all different games)")
     ap.add_argument("--edge-mix", default=EDGE_MIX, help="Novig-edge combo shapes")
+    ap.add_argument("--pregame-minutes", type=float, default=10,
+                    help="only games starting at least this far ahead; negative includes live games "
+                         "(e.g. -240: started up to 4 h ago)")
     ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
     ap.add_argument("--edge-auto", type=int, default=1, help="Novig-edge combos of each EDGE_MIX shape per batch")
     ap.add_argument("--edge-gap", type=float, default=0.02, help="min |Kalshi - Novig| leg fair gap")
@@ -108,7 +111,7 @@ def main() -> int:
         since = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
         base = [sys.executable, str(ROOT / "scripts" / "kalshi_rfq_recorder.py"),
                 "--collection", "KXMVESPORTSMULTIGAMEEXTENDED-R", "--series", "KXNBA*",
-                "--within-hours", "16", "--pregame-minutes", "10", "--wait", str(args.wait), "--gap", f"{gap_lo:.0f}", "--gap-max", f"{gap_hi:.0f}",
+                "--within-hours", "16", "--pregame-minutes", str(args.pregame_minutes), "--wait", str(args.wait), "--gap", f"{gap_lo:.0f}", "--gap-max", f"{gap_hi:.0f}",
                 "--poll", "1"]
         runs = [("random", base + ["--mix", args.mix, "--auto", str(args.auto)])]
         # (a batch can overshoot the cap by its own size, at most ~6)
