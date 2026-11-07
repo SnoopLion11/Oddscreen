@@ -67,9 +67,10 @@ def main() -> int:
                          "(e.g. -240: started up to 4 h ago)")
     ap.add_argument("--ask", action="store_true",
                     help="hold a +EV quote open (--hold-s) and stop, so the user can approve it with "
-                         "scripts/take_quote.py; RFQs are then sized for --max-stake")
+                         "scripts/take_quote.py; RFQs are then sized for about --target-stake")
     ap.add_argument("--hold-s", type=float, default=300)
-    ap.add_argument("--max-stake", type=float, default=5.0)
+    ap.add_argument("--max-stake", type=float, default=250.0, help="max $ per approved take (fees included)")
+    ap.add_argument("--target-stake", type=float, default=100.0, help="with --ask: size RFQs so a take is about this")
     ap.add_argument("--contracts", type=int, default=None, help="RFQ size (default 10, or 5 with --ask)")
     ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
     ap.add_argument("--edge-auto", type=int, default=1, help="Novig-edge combos of each EDGE_MIX shape per batch")
@@ -122,7 +123,8 @@ def main() -> int:
                 "--poll", "1", "--contracts", str(args.contracts or (5 if args.ask else 10))]
         if args.ask:
             base += ["--hold-s", str(args.hold_s), "--hold-pct", str(args.fair_pct),
-                     "--hold-min-c", str(args.fair_min_c), "--max-stake", str(args.max_stake)]
+                     "--hold-min-c", str(args.fair_min_c), "--max-stake", str(args.max_stake),
+                     "--target-stake", str(args.target_stake)]
         runs = [("random", base + ["--mix", args.mix, "--auto", str(args.auto)])]
         # (a batch can overshoot the cap by its own size, at most ~6)
         if args.edge_auto:

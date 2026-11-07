@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import math
 import random
 import sys
 import time
@@ -141,6 +142,10 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
     row["fair"] = _r(fair)
     row["naive_fair"] = _r(combos.combo_fair(fairs))   # product even for same-game legs (ignores correlation)
 
+    if getattr(args, "target_stake", 0):
+        args = sized_args(args, fair if fair is not None else combos.combo_fair(fairs))
+        row["contracts"] = args.contracts
+
     combo = client.create_combo_market(collection, [l.as_api() for l in legs])
     ticker = combo.get("market_ticker") or (combo.get("market") or {}).get("ticker")
     row["combo_ticker"] = ticker
@@ -177,6 +182,19 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
 
 
 PENDING = LOGS / "pending"
+
+
+def sized_args(args, yes_fair):
+    """Copy of args with --contracts set so a take costs about --target-stake on
+    the cheaper side, but never more than --max-stake on the pricier side."""
+    import copy
+    a = copy.copy(args)
+    if yes_fair is None or not 0 < yes_fair < 1:
+        return a
+    lo, hi = min(yes_fair, 1 - yes_fair), max(yes_fair, 1 - yes_fair)
+    n = min(math.ceil(args.target_stake / lo), math.floor(args.max_stake / (hi * 1.03)))
+    a.contracts = max(1, n)
+    return a
 
 
 def maybe_hold(client, rfq_id, ticker, legs, quotes, s, fair, args, raw) -> bool:
@@ -436,6 +454,8 @@ def main() -> int:
     ap.add_argument("--hold-pct", type=float, default=5.0)
     ap.add_argument("--hold-min-c", type=float, default=2.0)
     ap.add_argument("--max-stake", type=float, default=5.0, help="max $ for one approved take, fees included")
+    ap.add_argument("--target-stake", type=float, default=0,
+                    help="size each RFQ so a take costs about this much (0 = use --contracts)")
     ap.add_argument("--no-novig", action="store_true",
                     help="price player props from Kalshi's own book instead of Novig's public prices")
     args = ap.parse_args()

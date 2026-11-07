@@ -299,3 +299,13 @@ def test_maybe_hold(tmp_path, monkeypatch):
     assert not rec.maybe_hold(client, "r2", "COMBO", legs, q, s, fair, args, {})
     args.max_stake, args.hold_s = 5.0, 0                # hold disabled
     assert not rec.maybe_hold(client, "r3", "COMBO", legs, q, s, fair, args, {})
+
+
+def test_sized_args():
+    import types
+    a = types.SimpleNamespace(contracts=10, target_stake=100.0, max_stake=250.0)
+    b = rec.sized_args(a, 0.5)
+    assert b.contracts == 200 and a.contracts == 10          # $100 either side
+    c = rec.sized_args(a, 0.2)                                # YES 20c, NO 80c
+    assert c.contracts * 0.8 * 1.03 <= 250 and c.contracts * 0.2 >= 60
+    assert rec.sized_args(a, None).contracts == 10
