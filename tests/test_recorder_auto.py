@@ -285,7 +285,7 @@ def test_maybe_hold(tmp_path, monkeypatch):
     from oddscreen import combos as cb
     monkeypatch.setattr(rec, "PENDING", tmp_path)
     q = [cb.Quote("q1", "makerA", 0.30, 0.52, 0.2), cb.Quote("q2", "makerB", 0.20, 0.45, 0.3)]
-    fair = 0.524
+    fair = 0.60          # 48c vs 60c: ~+20%, passes the 15% tier for 25-50c
     s = cb.summarize(q, fair, 5, 1.0)
     legs = [rec.Leg("KXNBAREB-X-A-8", "KXNBAREB-X", "no"), rec.Leg("KXNBA3PT-Y-B-2", "KXNBA3PT-Y", "yes")]
     client = types.SimpleNamespace(market=lambda t: {"title": t + " title"})
@@ -297,6 +297,8 @@ def test_maybe_hold(tmp_path, monkeypatch):
     assert p["total"] <= 5.0 and p["titles"][0].startswith("NO ")
     args.max_stake = 1.0                                # too big -> not held
     assert not rec.maybe_hold(client, "r2", "COMBO", legs, q, s, fair, args, {})
+    assert not rec.maybe_hold(client, "r4", "COMBO", legs, q, cb.summarize(q, 0.524, 5, 1.0), 0.524,
+                              types.SimpleNamespace(**{**vars(args), 'max_stake': 5.0}), {})  # +7%: under the tier
     args.max_stake, args.hold_s = 5.0, 0                # hold disabled
     assert not rec.maybe_hold(client, "r3", "COMBO", legs, q, s, fair, args, {})
 
@@ -309,3 +311,11 @@ def test_sized_args():
     c = rec.sized_args(a, 0.2)                                # YES 20c, NO 80c
     assert c.contracts * 0.8 * 1.03 <= 250 and c.contracts * 0.2 >= 60
     assert rec.sized_args(a, None).contracts == 10
+
+
+def test_required_ev_tiers():
+    assert rec.required_ev_pct(0.60) == 5.0
+    assert rec.required_ev_pct(0.50) == 5.0
+    assert rec.required_ev_pct(0.30) == 15.0
+    assert rec.required_ev_pct(0.10) == 25.0
+    assert rec.required_ev_pct(0.60, floor=8.0) == 8.0

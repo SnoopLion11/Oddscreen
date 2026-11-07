@@ -107,8 +107,9 @@ def take(c, p, path: Path, a) -> int:
     ev = (fair / (cost + fee) - 1) * 100
     edge_c = (fair - cost - fee) * 100
     print(f"now: cost {cost:.3f} + fee {fee:.3f}, fair {fair:.3f} ({'/'.join(src)}), EV {ev:+.1f}%, edge {edge_c:+.1f}c")
-    if ev < a.min_pct or edge_c < a.min_c:
-        print("refused: no longer +EV enough")
+    need = rec.required_ev_pct(cost, a.min_pct)
+    if ev < need or edge_c < a.min_c:
+        print(f"refused: no longer +EV enough (needs {need:.0f}% at this price)")
         return 1
     c.accept_quote(p["rfq_id"], p["quote_id"], p["side"])
     print(f"accepted {p['contracts']} x {p['side'].upper()} at {cost:.3f}; waiting for the maker to confirm")

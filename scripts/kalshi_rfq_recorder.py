@@ -183,6 +183,18 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
 
 PENDING = LOGS / "pending"
 
+# The user's rule (Nov 6): longer odds need more edge. (min price, min EV %% after fees)
+EV_TIERS = ((0.50, 5.0), (0.25, 15.0), (0.0, 25.0))
+
+
+def required_ev_pct(cost: float, floor: float = 0.0) -> float:
+    """EV %% (after fees) a take at this price must have: 5%% at 50c+, 15%% at
+    25-50c, 25%% under 25c; never below `floor`."""
+    for min_price, pct in EV_TIERS:
+        if cost >= min_price:
+            return max(pct, floor)
+    return max(EV_TIERS[-1][1], floor)
+
 
 def sized_args(args, yes_fair):
     """Copy of args with --contracts set so a take costs about --target-stake on
@@ -210,7 +222,7 @@ def maybe_hold(client, rfq_id, ticker, legs, quotes, s, fair, args, raw) -> bool
             continue
         edge_c = r.ev_pct_fair / 100 * (r.cost + r.fee) * 100
         total = args.contracts * (r.cost + r.fee)
-        if r.ev_pct_fair < args.hold_pct or edge_c < args.hold_min_c:
+        if r.ev_pct_fair < required_ev_pct(r.cost, args.hold_pct) or edge_c < args.hold_min_c:
             continue
         if total > args.max_stake + 1e-9:
             raw["hold_skipped"] = f"{side}: stake ${total:.2f} over ${args.max_stake:.2f}"

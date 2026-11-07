@@ -165,8 +165,8 @@ def main() -> int:
         print(f"{stamp} {n} requests, {len(new)} alerts", flush=True)
         for a in new:
             print("  ALERT " + json.dumps(a), flush=True)
-        if any(a["kind"] == "fair" for a in new):
-            return 3
+        if any(a["kind"] == "fair" for a in new) and not args.ask:
+            return 3     # with --ask only held quotes (which pass the odds tiers) stop the run
         pause = max(pause_for(), args.every * 60 - (time.time() - t0))
         time.sleep(max(0.0, min(pause, end - time.time())))
     print(f"done: {len(found)} alerts", flush=True)
