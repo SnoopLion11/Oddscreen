@@ -151,16 +151,19 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
     rfq_id = str(rfq.get("id") or rfq.get("rfq_id") or (rfq.get("rfq") or {}).get("id"))
     row["rfq_id"] = rfq_id
     t0 = time.monotonic()
+    held = False
     try:
         quotes, raw_quotes = collect_quotes(client, rfq_id, t0, args.wait, args.poll)
+        raw["quotes"] = raw_quotes
+        s = combos.summarize(quotes, fair, args.contracts, args.fee_mult)
+        held = maybe_hold(client, rfq_id, ticker, legs, quotes, s, fair, args, raw)
     finally:
-        try:
-            client.delete_rfq(rfq_id)
-        except kalshi.KalshiError as e:
-            raw["delete_error"] = str(e)
-    raw["quotes"] = raw_quotes
+        if not held:
+            try:
+                client.delete_rfq(rfq_id)
+            except kalshi.KalshiError as e:
+                raw["delete_error"] = str(e)
 
-    s = combos.summarize(quotes, fair, args.contracts, args.fee_mult)
     row.update(n_quotes=s.n_quotes, n_quoters=s.n_quoters, consensus_mid=_r(s.consensus_mid),
                mid_spread_c=_r(s.mid_spread_c, 2),
                first_quote_s=_r(min((q.first_seen_s for q in quotes), default=None), 2))
@@ -171,6 +174,63 @@ def _record(client, collection: str, legs: list[Leg], args, row: dict, raw: dict
             f"{name}_ev_pct": _r(r.ev_pct_fair, 2), f"{name}_ev_pct_prefee": _r(r.ev_pct_fair_prefee, 2),
             f"{name}_consensus": _r(r.consensus), f"{name}_edge_vs_consensus_c": _r(r.edge_vs_consensus_c, 2),
         })
+
+
+PENDING = LOGS / "pending"
+
+
+def maybe_hold(client, rfq_id, ticker, legs, quotes, s, fair, args, raw) -> bool:
+    """With --hold-s: if the best price on a side is at least --hold-pct %% AND
+    --hold-min-c cents under fair after fees, and the whole stake fits in
+    --max-stake, keep the RFQ open and write logs/pending/<rfq_id>.json for the
+    user to approve (scripts/take_quote.py). Nothing is accepted here."""
+    if not args.hold_s or fair is None:
+        return False
+    for side in ("yes", "no"):
+        r = getattr(s, side)
+        if r.cost is None or r.ev_pct_fair is None:
+            continue
+        edge_c = r.ev_pct_fair / 100 * (r.cost + r.fee) * 100
+        total = args.contracts * (r.cost + r.fee)
+        if r.ev_pct_fair < args.hold_pct or edge_c < args.hold_min_c:
+            continue
+        if total > args.max_stake + 1e-9:
+            raw["hold_skipped"] = f"{side}: stake ${total:.2f} over ${args.max_stake:.2f}"
+            continue
+        key = "no_bid" if side == "yes" else "yes_bid"     # we buy YES at 1 - no_bid
+        best = [q for q in quotes if getattr(q, key) and abs(1 - getattr(q, key) - r.cost) < 1e-9]
+        if not best:
+            continue
+        q = min(best, key=lambda q: q.first_seen_s)
+        titles = []
+        for l in legs:
+            try:
+                titles.append(f"{'NO ' if l.side == 'no' else ''}{client.market(l.market_ticker).get('title', l.market_ticker)}")
+            except kalshi.KalshiError:
+                titles.append(f"{l.market_ticker}:{l.side}")
+        side_fair = fair if side == "yes" else 1 - fair
+        pend = dict(rfq_id=rfq_id, quote_id=q.quote_id, creator=q.creator, combo_ticker=ticker, side=side,
+                    cost=round(r.cost, 4), fee=round(r.fee, 4), contracts=args.contracts, total=round(total, 2),
+                    fair=round(side_fair, 4), ev_pct=round(r.ev_pct_fair, 2), edge_c=round(edge_c, 2),
+                    legs=[l.as_api() for l in legs], titles=titles,
+                    created=time.time(), expires=time.time() + args.hold_s)
+        PENDING.mkdir(parents=True, exist_ok=True)
+        (PENDING / f"{rfq_id}.json").write_text(json.dumps(pend, indent=1))
+        raw["held"] = pend
+        return True
+    return False
+
+
+def cleanup_pending(client) -> None:
+    """Delete RFQs whose approval window has passed."""
+    for f in sorted(PENDING.glob("*.json")) if PENDING.exists() else []:
+        p = json.loads(f.read_text())
+        if time.time() > p["expires"]:
+            try:
+                client.delete_rfq(p["rfq_id"])
+            except kalshi.KalshiError:
+                pass
+            f.rename(f.with_suffix(".expired"))
 
 
 # --- auto combo generation ---------------------------------------------------
@@ -371,6 +431,11 @@ def main() -> int:
     ap.add_argument("--novig-edge", type=float, default=None,
                     help="with --collection: only player-prop legs whose Kalshi price is at least this far "
                     "(e.g. 0.02) from Novig's fair, on the side Kalshi underprices")
+    ap.add_argument("--hold-s", type=float, default=0,
+                    help="keep a +EV RFQ open this many seconds for the user's approval (0 = never)")
+    ap.add_argument("--hold-pct", type=float, default=5.0)
+    ap.add_argument("--hold-min-c", type=float, default=2.0)
+    ap.add_argument("--max-stake", type=float, default=5.0, help="max $ for one approved take, fees included")
     ap.add_argument("--no-novig", action="store_true",
                     help="price player props from Kalshi's own book instead of Novig's public prices")
     args = ap.parse_args()
@@ -392,6 +457,7 @@ def main() -> int:
         print(f"Novig public prices: {n} NBA markets" if not args.props.error
               else f"Novig unreachable ({args.props.error}); props use Kalshi's book")
 
+    cleanup_pending(client)
     if args.list_collections:
         for c in client.collections(status="open"):
             print(f"{c.get('collection_ticker', ''):40} legs {c.get('size_min')}-{c.get('size_max')}  {c.get('title', '')}")
@@ -422,6 +488,11 @@ def main() -> int:
             jf.write(json.dumps(raw, default=str) + "\n")
             cf.flush()
             jf.flush()
+            if raw.get("held"):
+                h = raw["held"]
+                print(f"PENDING {json.dumps(h)}", flush=True)
+                print(f"\nwrote {csv_path}\n      {jsonl_path}")
+                return 4
             print(f"[{i}/{len(todo)}] {row['legs']}\n    fair {row['fair'] or '-'}  quoters {row['n_quoters'] or 0}"
                   f"  YES {row['yes_cost'] or '-'} (EV {row['yes_ev_pct'] or '-'}%, vs others {row['yes_edge_vs_consensus_c'] or '-'}c)"
                   f"  NO {row['no_cost'] or '-'} (EV {row['no_ev_pct'] or '-'}%, vs others {row['no_edge_vs_consensus_c'] or '-'}c)"

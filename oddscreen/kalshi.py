@@ -60,6 +60,23 @@ def check_allowed(method: str, path: str) -> None:
         raise PermissionError(f"refused: {method} {path} is not allowed in the log-only recorder")
 
 
+# Extra routes for TradingClient only (scripts/take_quote.py, run after the user
+# approves one specific quote). Confirming quotes and placing orders stay refused.
+_TRADE_ALLOWED = [
+    ("GET", re.compile(r"^/portfolio/balance$")),
+    ("GET", re.compile(r"^/portfolio/fills$")),
+    ("GET", re.compile(rf"^/communications/rfqs/{_T}/quotes/{_T}$")),
+    ("PUT", re.compile(rf"^/communications/rfqs/{_T}/quotes/{_T}/accept$")),
+]
+_TRADE_FORBIDDEN = re.compile(r"/confirm|/orders")
+
+
+def check_trade_allowed(method: str, path: str) -> None:
+    if any(m == method and r.match(path) for m, r in _TRADE_ALLOWED) and not _TRADE_FORBIDDEN.search(path):
+        return
+    check_allowed(method, path)
+
+
 # --- signing ----------------------------------------------------------------
 
 class Signer:
@@ -135,8 +152,11 @@ class Client:
         self.min_gap_s = min_gap_s   # Basic tier: 10 req/s sustained; stay well below
         self._last = 0.0
 
-    def request(self, method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None):
+    def _check(self, method: str, path: str) -> None:
         check_allowed(method, path)
+
+    def request(self, method: str, path: str, params: Optional[dict] = None, body: Optional[dict] = None):
+        self._check(method, path)
         full_path = self.root + path
         url = self.base + path
         if params:
@@ -223,6 +243,39 @@ class Client:
 
     def delete_rfq(self, rfq_id: str) -> None:
         self.request("DELETE", f"/communications/rfqs/{rfq_id}")
+
+
+class TradingClient(Client):
+    """Client that can also accept ONE quote on our own RFQ (requester side),
+    read the balance and read fills. Used only by scripts/take_quote.py after
+    the user approves a specific quote. Cannot confirm quotes or place orders.
+
+    Side mapping (docs.kalshi.com, FIX AcceptQuote: "BUY accepts the maker's NO
+    quote and SELL accepts the maker's YES quote"): accepted_side names the
+    maker's side, so to end up long YES we accept the maker's "no" bid
+    (paying 1 - no_bid), and long NO accepts the maker's "yes" bid.
+    take_quote.py checks the resulting fill's outcome_side."""
+
+    def _check(self, method: str, path: str) -> None:
+        check_trade_allowed(method, path)
+
+    def balance(self) -> dict:
+        return self.request("GET", "/portfolio/balance")
+
+    def fills(self, **params) -> list[dict]:
+        return self.request("GET", "/portfolio/fills", params).get("fills", [])
+
+    def rfq_quote(self, rfq_id: str, quote_id: str) -> dict:
+        page = self.request("GET", f"/communications/rfqs/{rfq_id}/quotes/{quote_id}")
+        return page.get("quote") or page
+
+    def accept_quote(self, rfq_id: str, quote_id: str, want: str) -> dict:
+        """Take the quote so that we end up long `want` ("yes" or "no")."""
+        if want not in ("yes", "no"):
+            raise ValueError(want)
+        maker_side = "no" if want == "yes" else "yes"
+        return self.request("PUT", f"/communications/rfqs/{rfq_id}/quotes/{quote_id}/accept",
+                            body={"accepted_side": maker_side})
 
 
 # --- parsing helpers ----------------------------------------------------------

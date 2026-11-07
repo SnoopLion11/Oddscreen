@@ -16,7 +16,8 @@ Player-prop legs are de-vigged on Novig's prices when listed there.
 
   python scripts/nba_watch.py --until 2026-11-03T03:00Z --max-minutes 60
 
-Exits with status 3 as soon as a "fair" alert appears (best price --fair-pct
+With --ask, exits with status 4 when a +EV quote is held open for approval
+(prints a PENDING line; see scripts/take_quote.py). Exits with status 3 as soon as a "fair" alert appears (best price --fair-pct
 or more AND --fair-min-c cents or more better than fair value after fees), otherwise after --max-minutes or
 at --until. Alerts are appended to logs/alerts_<date>.jsonl. Quotes are never
 accepted.
@@ -64,6 +65,12 @@ def main() -> int:
     ap.add_argument("--pregame-minutes", type=float, default=10,
                     help="only games starting at least this far ahead; negative includes live games "
                          "(e.g. -240: started up to 4 h ago)")
+    ap.add_argument("--ask", action="store_true",
+                    help="hold a +EV quote open (--hold-s) and stop, so the user can approve it with "
+                         "scripts/take_quote.py; RFQs are then sized for --max-stake")
+    ap.add_argument("--hold-s", type=float, default=300)
+    ap.add_argument("--max-stake", type=float, default=5.0)
+    ap.add_argument("--contracts", type=int, default=None, help="RFQ size (default 10, or 5 with --ask)")
     ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
     ap.add_argument("--edge-auto", type=int, default=1, help="Novig-edge combos of each EDGE_MIX shape per batch")
     ap.add_argument("--edge-gap", type=float, default=0.02, help="min |Kalshi - Novig| leg fair gap")
@@ -112,7 +119,10 @@ def main() -> int:
         base = [sys.executable, str(ROOT / "scripts" / "kalshi_rfq_recorder.py"),
                 "--collection", "KXMVESPORTSMULTIGAMEEXTENDED-R", "--series", "KXNBA*",
                 "--within-hours", "16", "--pregame-minutes", str(args.pregame_minutes), "--wait", str(args.wait), "--gap", f"{gap_lo:.0f}", "--gap-max", f"{gap_hi:.0f}",
-                "--poll", "1"]
+                "--poll", "1", "--contracts", str(args.contracts or (5 if args.ask else 10))]
+        if args.ask:
+            base += ["--hold-s", str(args.hold_s), "--hold-pct", str(args.fair_pct),
+                     "--hold-min-c", str(args.fair_min_c), "--max-stake", str(args.max_stake)]
         runs = [("random", base + ["--mix", args.mix, "--auto", str(args.auto)])]
         # (a batch can overshoot the cap by its own size, at most ~6)
         if args.edge_auto:
@@ -124,6 +134,11 @@ def main() -> int:
                 time.sleep(pause_for())   # same random spacing between the two runs
             r = subprocess.run(cmd, capture_output=True, text=True)
             n += sum(1 for l in r.stdout.splitlines() if l.startswith("["))
+            if r.returncode == 4:
+                for l in r.stdout.splitlines():
+                    if l.startswith("PENDING "):
+                        print(l, flush=True)
+                return 4
             if r.returncode:
                 stamp = datetime.now(timezone.utc).strftime("%H:%M UTC")
                 print(f"{stamp} {name} batch failed: {(r.stdout + r.stderr).strip().splitlines()[-1:]}", flush=True)

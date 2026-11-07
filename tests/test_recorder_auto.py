@@ -1,3 +1,5 @@
+import json
+import pytest
 import importlib.util
 from pathlib import Path
 
@@ -252,3 +254,48 @@ def test_track_sgp_flags_tracked_quoter_near_leg_product():
     assert "track_sgp" in kinds
     rec_["quotes"][0] = q("99516d7e-aaaa", 0.60)                              # 0.40 = 1.33x: not tracked
     assert "track_sgp" not in [a["kind"] for a in rr.alerts(rec_)]
+
+
+# --- approval flow (hold + take) ---------------------------------------------
+
+def test_trading_client_routes():
+    from oddscreen import kalshi as k
+    k.check_trade_allowed("PUT", "/communications/rfqs/r1/quotes/q1/accept")
+    k.check_trade_allowed("GET", "/portfolio/balance")
+    for m, p in [("PUT", "/communications/rfqs/r1/quotes/q1/confirm"), ("POST", "/portfolio/orders"),
+                 ("PUT", "/communications/quotes/q1/accept")]:
+        with pytest.raises(PermissionError):
+            k.check_trade_allowed(m, p)
+    with pytest.raises(PermissionError):           # the recorder's own client stays log-only
+        k.check_allowed("PUT", "/communications/rfqs/r1/quotes/q1/accept")
+
+
+def test_accept_maps_side_to_makers_bid():
+    from oddscreen import kalshi as k
+    sent = []
+    c = k.TradingClient.__new__(k.TradingClient)
+    c.request = lambda m, p, params=None, body=None: sent.append((m, p, body)) or {}
+    c.accept_quote("r1", "q1", "yes")
+    c.accept_quote("r1", "q1", "no")
+    assert [b["accepted_side"] for _, _, b in sent] == ["no", "yes"]
+
+
+def test_maybe_hold(tmp_path, monkeypatch):
+    import types
+    from oddscreen import combos as cb
+    monkeypatch.setattr(rec, "PENDING", tmp_path)
+    q = [cb.Quote("q1", "makerA", 0.30, 0.52, 0.2), cb.Quote("q2", "makerB", 0.20, 0.45, 0.3)]
+    fair = 0.524
+    s = cb.summarize(q, fair, 5, 1.0)
+    legs = [rec.Leg("KXNBAREB-X-A-8", "KXNBAREB-X", "no"), rec.Leg("KXNBA3PT-Y-B-2", "KXNBA3PT-Y", "yes")]
+    client = types.SimpleNamespace(market=lambda t: {"title": t + " title"})
+    args = types.SimpleNamespace(hold_s=300, hold_pct=5.0, hold_min_c=2.0, max_stake=5.0, contracts=5)
+    raw = {}
+    assert rec.maybe_hold(client, "r1", "COMBO", legs, q, s, fair, args, raw)
+    p = json.loads((tmp_path / "r1.json").read_text())
+    assert (p["side"], p["quote_id"], p["cost"]) == ("yes", "q1", 0.48)
+    assert p["total"] <= 5.0 and p["titles"][0].startswith("NO ")
+    args.max_stake = 1.0                                # too big -> not held
+    assert not rec.maybe_hold(client, "r2", "COMBO", legs, q, s, fair, args, {})
+    args.max_stake, args.hold_s = 5.0, 0                # hold disabled
+    assert not rec.maybe_hold(client, "r3", "COMBO", legs, q, s, fair, args, {})
