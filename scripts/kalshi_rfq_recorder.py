@@ -368,9 +368,10 @@ def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: i
                 series: list[str] | None = None, within_hours: float | None = None, same_game: int = 1,
                 pregame_minutes: float | None = None, mix: list[tuple[int, int]] | None = None,
                 props: novig.PropBook | None = None, novig_edge: float | None = None,
-                max_vig: float | None = None):
+                max_vig: float | None = None, exclude: set[str] | None = None):
     """n combos for each (legs, same_game) in mix (default: just n_legs, same_game).
-    With novig_edge (and props), legs come only from novig_edge_legs()."""
+    With novig_edge (and props), legs come only from novig_edge_legs().
+    Markets whose ticker is in exclude are never used as legs."""
     mix = mix or [(n_legs, same_game)]
     col = client.collection(collection_ticker)
     lo = col.get("size_min") or 2
@@ -387,6 +388,8 @@ def auto_combos(client: kalshi.Client, collection_ticker: str, n: int, n_legs: i
                          "e.g. --series KXNFLGAME,KXNFLSPREAD,KXNFLTOTAL or --series 'KXNBA*'")
     else:
         markets = [m for ev in events for m in client.markets(event_ticker=ev["ticker"], status="open")]
+    if exclude:
+        markets = [m for m in markets if m.get("ticker") not in exclude]
     by_game = group_by_game(events, markets, within_hours, pregame_minutes=pregame_minutes)
     if novig_edge is not None:
         if props is None or props.error:
@@ -468,6 +471,8 @@ def main() -> int:
     ap.add_argument("--max-stake", type=float, default=5.0, help="max $ for one approved take, fees included")
     ap.add_argument("--target-stake", type=float, default=0,
                     help="size each RFQ so a take costs about this much (0 = use --contracts)")
+    ap.add_argument("--exclude", default="",
+                    help="comma-separated leg market tickers never to use (e.g. a leg the user ruled out)")
     ap.add_argument("--no-novig", action="store_true",
                     help="price player props from Kalshi's own book instead of Novig's public prices")
     args = ap.parse_args()
@@ -501,7 +506,8 @@ def main() -> int:
         [x.strip() for x in args.series.split(",") if x.strip()] if args.series else None, args.within_hours,
         args.same_game, args.pregame_minutes,
         [tuple(int(x) for x in p.split(":")) for p in args.mix.split(",")] if args.mix else None,
-        args.props, args.novig_edge, args.max_vig)
+        args.props, args.novig_edge, args.max_vig,
+        {x.strip() for x in args.exclude.split(",") if x.strip()})
 
     LOGS.mkdir(exist_ok=True)
     day = datetime.now(timezone.utc).strftime("%Y%m%d")

@@ -71,6 +71,7 @@ def main() -> int:
     ap.add_argument("--hold-s", type=float, default=300)
     ap.add_argument("--max-stake", type=float, default=250.0, help="max $ per approved take (fees included)")
     ap.add_argument("--target-stake", type=float, default=100.0, help="with --ask: size RFQs so a take is about this")
+    ap.add_argument("--exclude", default="", help="comma-separated leg market tickers never to use")
     ap.add_argument("--contracts", type=int, default=None, help="RFQ size (default 10, or 5 with --ask)")
     ap.add_argument("--auto", type=int, default=1, help="random combos of each MIX shape per batch")
     ap.add_argument("--edge-auto", type=int, default=1, help="Novig-edge combos of each EDGE_MIX shape per batch")
@@ -121,6 +122,8 @@ def main() -> int:
                 "--collection", "KXMVESPORTSMULTIGAMEEXTENDED-R", "--series", "KXNBA*",
                 "--within-hours", "16", "--pregame-minutes", str(args.pregame_minutes), "--wait", str(args.wait), "--gap", f"{gap_lo:.0f}", "--gap-max", f"{gap_hi:.0f}",
                 "--poll", "1", "--contracts", str(args.contracts or (5 if args.ask else 10))]
+        if args.exclude:
+            base += ["--exclude", args.exclude]
         if args.ask:
             base += ["--hold-s", str(args.hold_s), "--hold-pct", str(args.fair_pct),
                      "--hold-min-c", str(args.fair_min_c), "--max-stake", str(args.max_stake),
